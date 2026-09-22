@@ -25,16 +25,14 @@ const MODE_GUIDE = {
   canvas: {
     title: '🖼️ 画布控制模式',
     items: [
-      '<strong>🤲 双手拉伸 / 靠拢</strong>：两手距离拉大=放大，靠拢=缩小',
-      '<strong>🤲 双手平移</strong>：两只手同时向指定方向移动',
-      '<strong>🤙 四指勾入 (往前勾手)</strong>：以当前手势位置放大画布',
-      '<strong>🖐️ 四指外展</strong>：缩小画布',
-      '<strong>🖐️ 展掌移动</strong>：连续拖拽平移画布',
-      '<strong>✊ 握拳</strong>：一键复位视图 (100% 居中)',
-      '<strong>🤏 捏合</strong>：点击 / 确认',
+      '<strong>🤲 两手手掌远离</strong>：放大画布',
+      '<strong>🤲 两手手掌靠近</strong>：缩小画布',
+      '<strong>✊ 两手握拳</strong>：停止一切操作 (锁定视图)',
+      '<strong>🖐️ 单手手掌张开</strong>：拖动平移画布',
+      '<strong>✊ 单手握拳</strong>：停止操作',
     ],
-    badgePinch: '🤙 勾手→放大',
-    badgePalm: '🖐️ 掌移→平移',
+    badgePinch: '🤲 双手远离→放大 / 靠近→缩小',
+    badgePalm: '✊ 握拳→停止操作',
     hudLabel: '画布控制',
   },
   select: {
