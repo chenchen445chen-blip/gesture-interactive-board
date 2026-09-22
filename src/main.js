@@ -277,8 +277,41 @@ class GestureApp {
     }
   }
 
+  // ─── 动态手势动作分发 ──────────────────────────────────
+  /**
+   * 根据 MotionDetector 识别出的动作执行对应画布操作
+   * 所有模式均响应（动态动作优先级高于静态模式）
+   */
+  _handleMotionAction(action, screenPos) {
+    const cx = screenPos?.x ?? window.innerWidth / 2;
+    const cy = screenPos?.y ?? window.innerHeight / 2;
+
+    const ACTION_MAP = {
+      // 四指往前勾 → 放大画布（以手所在位置为中心）
+      CURL_IN:     { label: '🤏 四指勾入 → 放大',   fn: () => this.drawingBoard.zoomIn(0.35, cx, cy) },
+      // 四指往外展 → 缩小画布
+      CURL_OUT:    { label: '🖐️ 四指展开 → 缩小',   fn: () => this.drawingBoard.zoomOut(0.35, cx, cy) },
+      // 向左滑动 → 画布右移（内容向右）
+      SWIPE_LEFT:  { label: '👈 向左滑 → 画布右移',  fn: () => this.drawingBoard.panBy(200, 0) },
+      // 向右滑动 → 画布左移
+      SWIPE_RIGHT: { label: '👉 向右滑 → 画布左移',  fn: () => this.drawingBoard.panBy(-200, 0) },
+      // 向上滑动 → 画布下移
+      SWIPE_UP:    { label: '👆 向上滑 → 画布下移',  fn: () => this.drawingBoard.panBy(0, 180) },
+      // 向下滑动 → 画布上移
+      SWIPE_DOWN:  { label: '👇 向下滑 → 画布上移',  fn: () => this.drawingBoard.panBy(0, -180) },
+    };
+
+    const entry = ACTION_MAP[action];
+    if (!entry) return;
+
+    entry.fn();
+    this.showToast(entry.label);
+    this.statsHud.updateState(action, entry.label);
+  }
+
   // ─── 手部离开 ──────────────────────────────────────────
   _onHandLost() {
+
     if (this.drawingBoard.isDrawing) this.drawingBoard.endStroke();
     if (this.isCurrentlyErasing) {
       this.isCurrentlyErasing = false;
