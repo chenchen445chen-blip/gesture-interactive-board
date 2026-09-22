@@ -12,6 +12,10 @@ export class GestureDetector {
     this.handLandmarker = null;
     this.classifier  = new GestureClassifier();
     this.smoother    = new CoordinateSmoother(0.4);
+    this.smootherHands = {
+      Left: new CoordinateSmoother(0.4),
+      Right: new CoordinateSmoother(0.4),
+    };
     this.motion      = new MotionDetector({ windowSize: 12, cooldownMs: 900 });
     this.isReady     = false;
     this.lastTimestamp = -1;
@@ -124,37 +128,80 @@ export class GestureDetector {
 
     this.lostFrameCount = 0;
 
-    const rawLandmarks  = result.landmarks[0];
-    const handedness     = result.handedness?.[0]?.[0]?.categoryName || 'Right';
-    const classification = this.classifier.classify(rawLandmarks, handedness);
+    // 解析当前帧检测到的每一只手（最多支持 2 只手）
+    const parsedHands = result.landmarks.map((rawLandmarks, index) => {
+      const handedness = result.handedness?.[index]?.[0]?.categoryName || (index === 0 ? 'Right' : 'Left');
+      const classification = this.classifier.classify(rawLandmarks, handedness);
 
-    // 动态动作检测（帧间轨迹分析）
-    const motionResult = this.motion.update(rawLandmarks, classification);
+      // 坐标锚点：张开手掌用手掌中心，其余用食指尖
+      const targetPoint = classification.isOpenPalm && classification.palmCenter
+        ? classification.palmCenter
+        : (classification.indexTip || rawLandmarks[8] || rawLandmarks[0]);
 
-    // 坐标锚点：张开手掌用手掌中心，其余用食指尖
-    const targetPoint = classification.isOpenPalm && classification.palmCenter
-      ? classification.palmCenter
-      : (classification.indexTip || rawLandmarks[8] || rawLandmarks[0]);
+      // 镜像映射并独立平滑
+      const rawX = (1 - targetPoint.x) * viewport.width;
+      const rawY = targetPoint.y * viewport.height;
+      const smoother = this.smootherHands[handedness] || this.smoother;
+      const smoothedPos = smoother.smooth({ x: rawX, y: rawY });
 
-    // 镜像映射
-    const rawX = (1 - targetPoint.x) * viewport.width;
-    const rawY = targetPoint.y * viewport.height;
-    const smoothedPos = this.smoother.smooth({ x: rawX, y: rawY });
+      const estimatedRadius = classification.palmSize
+        ? Math.max(45, Math.min(110, classification.palmSize * viewport.width * 0.35))
+        : 60;
 
-    const estimatedRadius = classification.palmSize
-      ? Math.max(45, Math.min(110, classification.palmSize * viewport.width * 0.35))
-      : 60;
+      return {
+        id: index,
+        rawLandmarks,
+        handedness, // 'Left' | 'Right'
+        classification,
+        screenPos: smoothedPos,
+        eraserRadius: Math.round(estimatedRadius),
+        facing: classification.facing,
+      };
+    });
+
+    // 主手优先选择右手，若无右手则取第一只手
+    const primaryHand = parsedHands.find((h) => h.handedness.toLowerCase() === 'right') || parsedHands[0];
+
+    // 动态动作检测（分析主手的时序动作）
+    const motionResult = this.motion.update(primaryHand.rawLandmarks, primaryHand.classification);
+
+    // 双手联合特征计算
+    let twoHandsData = null;
+    if (parsedHands.length >= 2) {
+      const h1 = parsedHands[0];
+      const h2 = parsedHands[1];
+      const dx = h2.screenPos.x - h1.screenPos.x;
+      const dy = h2.screenPos.y - h1.screenPos.y;
+      const distance = Math.hypot(dx, dy);
+      const center = {
+        x: (h1.screenPos.x + h2.screenPos.x) / 2,
+        y: (h1.screenPos.y + h2.screenPos.y) / 2,
+      };
+      twoHandsData = {
+        distance,
+        center,
+        angle: Math.atan2(dy, dx),
+      };
+    }
 
     this.lastResult = {
-      rawLandmarks,
+      // 兼容单手调用的主手属性
+      rawLandmarks: primaryHand.rawLandmarks,
+      classification: primaryHand.classification,
+      screenPos: primaryHand.screenPos,
+      eraserRadius: primaryHand.eraserRadius,
+      handedness: primaryHand.handedness,
+      facing: primaryHand.facing,
+
+      // 多手/双手扩展数据
+      hands: parsedHands,
       allHandsLandmarks: result.landmarks,
-      classification,
-      motionAction: motionResult?.action ?? null,     // 动态动作名称
+      isTwoHands: parsedHands.length >= 2,
+      twoHands: twoHandsData,
+
+      // 动态手势动作
+      motionAction: motionResult?.action ?? null,
       motionConfidence: motionResult?.confidence ?? 0,
-      screenPos: smoothedPos,
-      eraserRadius: Math.round(estimatedRadius),
-      handedness,
-      facing: classification.facing,
     };
 
     return this.lastResult;

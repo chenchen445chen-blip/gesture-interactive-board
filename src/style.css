@@ -555,6 +555,20 @@ input[type="range"]::-webkit-slider-thumb:hover {
   }
 }
 
+/* ── 副光标 (左手) 炫丽粉橙主题 ── */
+.virtual-cursor.cursor-secondary .cursor-dot {
+  background: #f43f5e;
+  box-shadow: 0 0 16px #f43f5e, 0 0 32px rgba(244, 63, 94, 0.4);
+}
+.virtual-cursor.cursor-secondary .cursor-ring {
+  border-color: rgba(244, 63, 94, 0.6);
+}
+.virtual-cursor.cursor-secondary .cursor-label {
+  border-color: rgba(244, 63, 94, 0.4);
+  color: #fce7f3;
+  background: rgba(25, 10, 18, 0.85);
+}
+
 .cursor-label {
   position: absolute;
   left: 36px;

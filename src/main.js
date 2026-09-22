@@ -168,27 +168,29 @@ class GestureApp {
       );
 
       if (result) {
-        const { rawLandmarks, classification, screenPos, eraserRadius, motionAction } = result;
-        this.virtualCursor.update(screenPos, classification, eraserRadius, this.currentMode);
-        this.drawingBoard.renderLandmarks(rawLandmarks, this.showSkeleton);
+        const { screenPos, motionAction, hands, isTwoHands } = result;
+
+        // 双光标与双手骨骼并行渲染
+        this.virtualCursor.updateMulti(hands, this.currentMode);
+        this.drawingBoard.renderLandmarks(hands, this.showSkeleton);
 
         // ── 根据当前模式分发交互逻辑 ──
         switch (this.currentMode) {
           case 'draw':
-            this._handleDrawMode(classification, screenPos, eraserRadius);
+            this._handleDrawMode(result);
             break;
 
           case 'canvas':
-            // 动态手势动作（四指勾入放大、展开缩小、滑动平移）仅在画布控制模式生效
-            if (motionAction) {
+            // 动态单手手势动作（四指勾入放大、展开缩小、滑动平移）仅在单手时生效
+            if (motionAction && !isTwoHands) {
               this._handleMotionAction(motionAction, screenPos);
             } else {
-              this._handleCanvasMode(classification, screenPos);
+              this._handleCanvasMode(result);
             }
             break;
 
           case 'select':
-            this._handleSelectMode(classification, screenPos);
+            this._handleSelectMode(result.classification, screenPos);
             break;
         }
       } else {
@@ -204,7 +206,46 @@ class GestureApp {
   }
 
   // ─── 画笔模式 ──────────────────────────────────────────
-  _handleDrawMode(classification, screenPos, eraserRadius) {
+  _handleDrawMode(result) {
+    const { isTwoHands, hands, classification, screenPos, eraserRadius } = result;
+
+    // ── 双手协同绘制 ──
+    if (isTwoHands && hands.length >= 2) {
+      const rightHand = hands.find((h) => h.handedness?.toLowerCase() === 'right') || hands[0];
+      const leftHand  = hands.find((h) => h !== rightHand) || hands[1];
+
+      // 任一手张开手心，触发该手所在位置的橡皮擦
+      const erasingHand = [rightHand, leftHand].find((h) => h.classification.isOpenPalm);
+      if (erasingHand) {
+        if (this.drawingBoard.isDrawing) this.drawingBoard.endStroke();
+        this.drawingBoard.eraseArea(erasingHand.screenPos.x, erasingHand.screenPos.y, erasingHand.eraserRadius);
+        this.isCurrentlyErasing = true;
+        this.statsHud.updateState('OPEN_PALM', `🤲 双手 · ${erasingHand.handedness === 'Left' ? '左手' : '右手'}橡皮擦`, erasingHand.classification.facing);
+        return;
+      }
+
+      if (this.isCurrentlyErasing) {
+        this.isCurrentlyErasing = false;
+        this.drawingBoard.saveState();
+      }
+
+      // 任一手捏合，由该手执行笔触绘制
+      const drawingHand = [rightHand, leftHand].find((h) => h.classification.isPinching);
+      if (drawingHand) {
+        if (!this.drawingBoard.isDrawing) {
+          this.drawingBoard.startStroke(drawingHand.screenPos.x, drawingHand.screenPos.y);
+        } else {
+          this.drawingBoard.drawTo(drawingHand.screenPos.x, drawingHand.screenPos.y);
+        }
+        this.statsHud.updateState('PINCH', `🤲 双手 · ${drawingHand.handedness === 'Left' ? '左手' : '右手'}绘制中`, drawingHand.classification.facing);
+      } else {
+        if (this.drawingBoard.isDrawing) this.drawingBoard.endStroke();
+        this.statsHud.updateState('TRACKING', `🤲 双手实时追踪中`, rightHand.classification.facing);
+      }
+      return;
+    }
+
+    // ── 单手模式 ──
     if (classification.isOpenPalm) {
       if (this.drawingBoard.isDrawing) this.drawingBoard.endStroke();
       this.drawingBoard.eraseArea(screenPos.x, screenPos.y, eraserRadius);
@@ -231,13 +272,51 @@ class GestureApp {
 
   // ─── 画布控制模式 ─────────────────────────────────────
   /**
-   * 手掌张开 → 平移画布（追踪手掌帧间位移）
-   * 捏合     → 缩放（追踪 pinchRatio 帧间变化量）
+   * 双手拉伸 → 缩放画布（双手拉大=放大，收拢=缩小）
+   * 双手中点 → 平移画布
+   * 单手手掌 → 平移画布
+   * 单手捏合 → 缩放
    * 握拳     → 复位视图
    */
-  _handleCanvasMode(classification, screenPos) {
+  _handleCanvasMode(result) {
+    const { isTwoHands, twoHands, hands, classification, screenPos } = result;
+
+    // ── 优先：双手多点触控（拉伸缩放 + 双手平移） ──
+    if (isTwoHands && twoHands) {
+      this.lastPanPos = null;
+      this.lastPinchRatio = null;
+
+      // 双手拉伸缩放（双手间距变化）
+      if (this.lastTwoHandsDist != null) {
+        const delta = twoHands.distance - this.lastTwoHandsDist;
+        if (Math.abs(delta) > 3) {
+          const factor = 1 + Math.max(-0.12, Math.min(0.12, delta / 350));
+          this.drawingBoard.zoomAt(factor, twoHands.center.x, twoHands.center.y);
+        }
+      }
+
+      // 双手中点协同平移
+      if (this.lastTwoHandsCenter != null) {
+        const panX = twoHands.center.x - this.lastTwoHandsCenter.x;
+        const panY = twoHands.center.y - this.lastTwoHandsCenter.y;
+        if (Math.hypot(panX, panY) > 2) {
+          this.drawingBoard.panBy(panX, panY);
+        }
+      }
+
+      this.lastTwoHandsDist = twoHands.distance;
+      this.lastTwoHandsCenter = { ...twoHands.center };
+
+      this.statsHud.updateState('TRACKING', `🤲 双手缩放/平移 · 间距 ${Math.round(twoHands.distance)}px`, 'PALM');
+      return;
+    }
+
+    // 单手恢复：清空双手记录
+    this.lastTwoHandsDist = null;
+    this.lastTwoHandsCenter = null;
+
+    // ── 单手模式 ──
     if (classification.isOpenPalm) {
-      // 手掌 → 平移
       if (this.lastPanPos) {
         this.drawingBoard.panBy(
           screenPos.x - this.lastPanPos.x,
@@ -250,13 +329,11 @@ class GestureApp {
       this.statsHud.updateState('OPEN_PALM', '🖼️ 画布 · 平移', classification.facing);
 
     } else if (classification.isPinching) {
-      // 捏合 → 缩放（pinchRatio 越小 = 捏得越紧 = 放大）
       this.lastPanPos = null;
       const pr = classification.pinchRatio;
       if (pr != null && this.lastPinchRatio != null) {
-        const delta = this.lastPinchRatio - pr; // 正值=越捏越紧=放大
+        const delta = this.lastPinchRatio - pr;
         if (Math.abs(delta) > 0.006) {
-          // 灵敏度 × 3，clamp 避免过激跳变
           const factor = 1 + Math.max(-0.08, Math.min(0.08, delta * 3));
           this.drawingBoard.zoomAt(factor, screenPos.x, screenPos.y);
         }
@@ -266,16 +343,15 @@ class GestureApp {
       this.statsHud.updateState('PINCH', '🖼️ 画布 · 缩放', classification.facing);
 
     } else if (classification.gesture === 'FIST') {
-      // 握拳 → 复位
       this.drawingBoard.resetView();
-      this.lastPanPos     = null;
-      this.lastPinchRatio = null;
+      this.lastPanPos         = null;
+      this.lastPinchRatio     = null;
       this.statsHud.updateState('FIST', '🖼️ 画布 · 视图复位', classification.facing);
       this.showToast('视图已复位');
 
     } else {
-      this.lastPanPos     = null;
-      this.lastPinchRatio = null;
+      this.lastPanPos         = null;
+      this.lastPinchRatio     = null;
       this.isCurrentlyPanning = false;
       this.statsHud.updateState(classification.gesture, '🖼️ 画布 · 悬停', classification.facing);
     }

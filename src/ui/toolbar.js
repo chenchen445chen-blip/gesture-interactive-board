@@ -14,6 +14,7 @@ const MODE_GUIDE = {
       '<strong>🤏 捏合</strong>：下笔作画',
       '<strong>☝️ 单食指伸出</strong>：悬停移动光标',
       '<strong>🖐️ 手掌张开 (手心朝前)</strong>：橡皮擦大面积擦除',
+      '<strong>🤲 双手协同</strong>：一手捏合作画，另一手张开擦除',
       '<strong>🤚 手背朝前</strong>：防误触悬停',
       '<strong>✊ 握拳</strong>：暂停绘制',
     ],
@@ -24,10 +25,11 @@ const MODE_GUIDE = {
   canvas: {
     title: '🖼️ 画布控制模式',
     items: [
+      '<strong>🤲 双手拉伸 / 靠拢</strong>：两手距离拉大=放大，靠拢=缩小',
+      '<strong>🤲 双手平移</strong>：两只手同时向指定方向移动',
       '<strong>🤙 四指勾入 (往前勾手)</strong>：以当前手势位置放大画布',
       '<strong>🖐️ 四指外展</strong>：缩小画布',
       '<strong>🖐️ 展掌移动</strong>：连续拖拽平移画布',
-      '<strong>👈👉 快速挥动</strong>：向指定方向滑动画布',
       '<strong>✊ 握拳</strong>：一键复位视图 (100% 居中)',
       '<strong>🤏 捏合</strong>：点击 / 确认',
     ],

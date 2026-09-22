@@ -1,92 +1,145 @@
 /**
  * 虚拟光标管理器 (VirtualCursor)
- * 渲染跟随食指位置的微动效光标，并在捏合时触发原生 DOM 事件 (click, mousedown, mouseup)
+ * 支持单手与双手模式，渲染跟随食指位置的微动效光标（右手蓝紫 / 左手粉橙）
  */
 export class VirtualCursor {
   constructor(cursorElement) {
-    this.cursor = cursorElement;
-    this.label = document.getElementById('cursor-label');
+    this.cursor1 = cursorElement;
+    this.cursor1.classList.add('cursor-primary');
+    this.label1 = document.getElementById('cursor-label');
+
+    // 动态克隆生成副光标 (左手)
+    let c2 = document.getElementById('virtual-cursor-2');
+    if (!c2 && cursorElement?.parentNode) {
+      c2 = cursorElement.cloneNode(true);
+      c2.id = 'virtual-cursor-2';
+      c2.classList.remove('cursor-primary');
+      c2.classList.add('cursor-secondary');
+      cursorElement.parentNode.appendChild(c2);
+    }
+    this.cursor2 = c2;
+    this.label2 = this.cursor2?.querySelector('.cursor-label');
+
+    // 保持对单光标的兼容引用
+    this.cursor = this.cursor1;
+    this.label = this.label1;
     this.x = 0;
     this.y = 0;
-    this.isPinching = false;
+    this.isPinching1 = false;
+    this.isPinching2 = false;
     this.lastHoveredElement = null;
     this.isVisible = false;
   }
 
   /**
-   * 显示或隐藏虚拟光标
+   * 显示或隐藏所有虚拟光标
    */
   setVisible(visible) {
-    if (this.isVisible === visible) return;
     this.isVisible = visible;
-    this.cursor.style.display = visible ? 'block' : 'none';
+    if (this.cursor1) this.cursor1.style.display = visible ? 'block' : 'none';
+    if (this.cursor2 && !visible) this.cursor2.style.display = 'none';
   }
 
   /**
-   * 更新光标位置和手势状态
-   * @param {{x: number, y: number}} pos 屏幕实际像素坐标
-   * @param {Object} classification 分类结果 { gesture, isPinching, isOpenPalm }
-   * @param {number} eraserRadius 橡皮擦半径
-   * @param {string} currentMode 当前交互模式 'draw' | 'canvas' | 'select'
+   * 多手联合更新方法（优先调用）
+   * @param {Array} hands 手部对象数组 [{ rawLandmarks, handedness, classification, screenPos, eraserRadius }, ...]
+   * @param {string} currentMode 'draw' | 'canvas' | 'select'
+   */
+  updateMulti(hands, currentMode = 'draw') {
+    if (!hands || hands.length === 0) {
+      this.setVisible(false);
+      return;
+    }
+
+    this.setVisible(true);
+
+    if (hands.length === 1) {
+      // 单手模式：仅激活主光标，隐藏副光标
+      this._updateSingleCursor(this.cursor1, this.label1, hands[0], currentMode, false);
+      if (this.cursor2) this.cursor2.style.display = 'none';
+    } else {
+      // 双手模式：两只光标同时激活
+      // 分配右手为主光标，左手为副光标
+      const rightHand = hands.find((h) => h.handedness?.toLowerCase() === 'right') || hands[0];
+      const leftHand  = hands.find((h) => h !== rightHand) || hands[1];
+
+      this._updateSingleCursor(this.cursor1, this.label1, rightHand, currentMode, true, '右手');
+      if (this.cursor2) {
+        this.cursor2.style.display = 'block';
+        this._updateSingleCursor(this.cursor2, this.label2, leftHand, currentMode, true, '左手');
+      }
+    }
+  }
+
+  /**
+   * 单光标更新兼容接口
    */
   update(pos, classification, eraserRadius = 55, currentMode = 'draw') {
-    this.setVisible(true);
-    this.x = pos.x;
-    this.y = pos.y;
+    this.updateMulti([{
+      screenPos: pos,
+      classification,
+      eraserRadius,
+      handedness: 'Right',
+    }], currentMode);
+  }
 
-    // 移动光标 DOM
-    this.cursor.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
+  /**
+   * 内部方法：更新单个光标 DOM 的形态与标签
+   */
+  _updateSingleCursor(cursorEl, labelEl, hand, currentMode, isMultiHand = false, handName = '') {
+    if (!cursorEl) return;
 
-    // 更新手势标签文本（根据模式差异化显示）
-    if (this.label) {
-      const facingTag = classification.facing === 'PALM' ? ' · 手心' : (classification.facing === 'BACK' ? ' · 手背' : '');
+    const { screenPos: pos, classification, eraserRadius = 55 } = hand;
+    cursorEl.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
+
+    if (labelEl) {
+      const facingTag = classification.facing === 'PALM' ? '·手心' : (classification.facing === 'BACK' ? '·手背' : '');
+      const prefix = isMultiHand && handName ? `[${handName}] ` : '';
+
       const gestureMapByMode = {
         draw: {
-          PINCH: '🤏 捏合→作画',
+          PINCH: '🤏 捏合作画',
           POINTING: '👉 食指悬停',
-          FIST: '✊ 握拳 (暂停)',
-          OPEN_PALM: '🖐️ 手掌→橡皮擦',
-          BACK_HAND: '🤚 手背→防误触',
+          FIST: '✊ 握拳暂停',
+          OPEN_PALM: '🖐️ 橡皮擦',
+          BACK_HAND: '🤚 防误触',
           PEACE: '✌️ 剪刀手',
           TRACKING: '🔍 追踪中',
         },
         canvas: {
-          PINCH: '🤏 捏合→点击',
+          PINCH: '🤏 捏合点击',
           POINTING: '👉 食指悬停',
-          FIST: '✊ 握拳 (暂停)',
-          OPEN_PALM: '🖐️ 手掌→平移画布',
-          BACK_HAND: '🤚 手背→防误触',
+          FIST: '✊ 握拳暂停',
+          OPEN_PALM: '🖐️ 平移画布',
+          BACK_HAND: '🤚 防误触',
           PEACE: '✌️ 剪刀手',
           TRACKING: '🔍 追踪中',
         },
         select: {
-          PINCH: '🤏 捏合→选中',
+          PINCH: '🤏 捏合选中',
           POINTING: '👉 食指移动',
-          FIST: '✊ 握拳 (暂停)',
-          OPEN_PALM: '🖐️ 手掌→取消',
-          BACK_HAND: '🤚 手背→悬停',
+          FIST: '✊ 握拳暂停',
+          OPEN_PALM: '🖐️ 放开取消',
+          BACK_HAND: '🤚 悬停',
           PEACE: '✌️ 剪刀手',
           TRACKING: '🔍 追踪中',
         },
       };
       const map = gestureMapByMode[currentMode] ?? gestureMapByMode.draw;
       const baseText = map[classification.gesture] || classification.gesture;
-      this.label.textContent = `${baseText}${facingTag}`;
+      labelEl.textContent = `${prefix}${baseText} ${facingTag}`;
     }
 
-    const wasPinching = this.isPinching;
-    this.isPinching = classification.isPinching;
+    const isPinching = classification.isPinching;
     const isErasing = classification.isOpenPalm && currentMode === 'draw';
     const isPanning = classification.isOpenPalm && currentMode === 'canvas';
     const isSelecting = classification.isPinching && currentMode === 'select';
 
-    // 清除所有模式 class
-    this.cursor.classList.remove('erasing', 'pinching', 'panning', 'selecting');
+    cursorEl.classList.remove('erasing', 'pinching', 'panning', 'selecting');
 
     if (isErasing) {
-      this.cursor.classList.add('erasing');
-      // 动态将橡皮擦环设为手掌擦除范围大小
-      const ring = this.cursor.querySelector('.cursor-ring');
+      cursorEl.classList.add('erasing');
+      const ring = cursorEl.querySelector('.cursor-ring');
       if (ring) {
         ring.style.width = `${eraserRadius * 2}px`;
         ring.style.height = `${eraserRadius * 2}px`;
@@ -94,7 +147,7 @@ export class VirtualCursor {
         ring.style.top = `${-eraserRadius + 16}px`;
       }
     } else {
-      const ring = this.cursor.querySelector('.cursor-ring');
+      const ring = cursorEl.querySelector('.cursor-ring');
       if (ring) {
         ring.style.width = '';
         ring.style.height = '';
@@ -102,18 +155,16 @@ export class VirtualCursor {
         ring.style.top = '';
       }
 
-      if (isPanning) {
-        this.cursor.classList.add('panning');
-      } else if (isSelecting) {
-        this.cursor.classList.add('selecting');
-      } else if (this.isPinching) {
-        this.cursor.classList.add('pinching');
-      }
+      if (isPanning) cursorEl.classList.add('panning');
+      else if (isSelecting) cursorEl.classList.add('selecting');
+      else if (isPinching) cursorEl.classList.add('pinching');
     }
 
-    // 仅在非大面积擦除/平移状态时才执行精准的微小按钮悬浮检测
-    if (!isErasing && !isPanning) {
-      this.handleHitTest(pos, wasPinching, this.isPinching);
+    // 仅针对主手执行 UI Hit-test 点击交互
+    if (cursorEl === this.cursor1 && !isErasing && !isPanning) {
+      const wasPinching = this.isPinching1;
+      this.isPinching1 = isPinching;
+      this.handleHitTest(pos, wasPinching, isPinching);
     }
   }
 
@@ -121,15 +172,12 @@ export class VirtualCursor {
    * 检测当前光标位置下覆盖的 DOM 元素，触发 hover 或点击
    */
   handleHitTest(pos, wasPinching, isPinching) {
-    // 隐藏光标自身防止 hit-test 命中光标本身
-    this.cursor.style.pointerEvents = 'none';
+    if (!this.cursor1) return;
+    this.cursor1.style.pointerEvents = 'none';
     const target = document.elementFromPoint(pos.x, pos.y);
-
     if (!target) return;
 
-    // 寻找可点击元素 (button 或其子项)
     const clickable = target.closest('button, input[type="range"]');
-
     if (clickable) {
       if (this.lastHoveredElement !== clickable) {
         if (this.lastHoveredElement) {
@@ -139,10 +187,8 @@ export class VirtualCursor {
         this.lastHoveredElement = clickable;
       }
 
-      // 当从未捏合变为捏合瞬间，触发一次点击
       if (!wasPinching && isPinching) {
         clickable.click();
-        // 增加点击触感动画类
         clickable.classList.add('gesture-active');
         setTimeout(() => clickable.classList.remove('gesture-active'), 180);
       }

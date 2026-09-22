@@ -257,7 +257,7 @@ export class DrawingBoard {
   //  骨骼渲染（固定在屏幕坐标，不受视图变换影响）
   // ═══════════════════════════════════════════════════════
 
-  renderLandmarks(landmarks, visible = true) {
+  renderLandmarks(input, visible = true) {
     this.landmarkCtx.clearRect(0, 0, this.landmarkCanvas.width, this.landmarkCanvas.height);
 
     if (this.pipCtx && this.pipCanvas) {
@@ -269,30 +269,85 @@ export class DrawingBoard {
       this.pipCtx.clearRect(0, 0, this.pipCanvas.width, this.pipCanvas.height);
     }
 
-    if (!visible || !landmarks || landmarks.length < 21) return;
+    if (!visible || !input) return;
 
-    this.drawSkeletonOnCtx(
-      this.landmarkCtx, landmarks,
-      this.landmarkCanvas.width, this.landmarkCanvas.height
-    );
-
-    if (this.pipCtx && this.pipCanvas?.width > 0) {
-      this.drawSkeletonOnCtx(
-        this.pipCtx, landmarks,
-        this.pipCanvas.width, this.pipCanvas.height, 0.7
-      );
+    // 归一化为手部数组 [{ rawLandmarks, handedness }, ...]
+    let handList = [];
+    if (Array.isArray(input)) {
+      if (input.length === 0) return;
+      if (Array.isArray(input[0])) {
+        // [[pt0..20], [pt0..20]]
+        handList = input.map((lm, idx) => ({ rawLandmarks: lm, handedness: idx === 0 ? 'Right' : 'Left' }));
+      } else if (input[0]?.rawLandmarks) {
+        // [{ rawLandmarks, handedness }, ...]
+        handList = input;
+      } else if (input[0]?.x !== undefined) {
+        // [pt0..20] 单手
+        handList = [{ rawLandmarks: input, handedness: 'Right' }];
+      }
+    } else if (input.hands) {
+      handList = input.hands;
     }
+
+    // 颜色调色板：右手为蓝紫色系，左手为玫红色系
+    const PALETTES = {
+      Right: {
+        line: 'rgba(99, 102, 241, 0.85)',
+        indexTip: '#06b6d4',
+        thumbTip: '#f59e0b',
+        joint: '#e0e7ff',
+        label: '右手',
+      },
+      Left: {
+        line: 'rgba(236, 72, 153, 0.85)',
+        indexTip: '#f43f5e',
+        thumbTip: '#fb923c',
+        joint: '#fce7f3',
+        label: '左手',
+      },
+    };
+
+    handList.forEach((hand, idx) => {
+      const isLeft = hand.handedness?.toLowerCase() === 'left' || idx === 1;
+      const theme = isLeft ? PALETTES.Left : PALETTES.Right;
+
+      this.drawSkeletonOnCtx(
+        this.landmarkCtx, hand.rawLandmarks,
+        this.landmarkCanvas.width, this.landmarkCanvas.height,
+        1.0, theme
+      );
+
+      if (this.pipCtx && this.pipCanvas?.width > 0) {
+        this.drawSkeletonOnCtx(
+          this.pipCtx, hand.rawLandmarks,
+          this.pipCanvas.width, this.pipCanvas.height,
+          0.7, theme, false
+        );
+      }
+    });
   }
 
-  drawSkeletonOnCtx(ctx, landmarks, width, height, scale = 1.0) {
+  drawSkeletonOnCtx(ctx, landmarks, width, height, scale = 1.0, theme = null, showLabel = true) {
+    if (!landmarks || landmarks.length < 21) return;
+
+    const t = theme || {
+      line: 'rgba(99, 102, 241, 0.75)',
+      indexTip: '#06b6d4',
+      thumbTip: '#f59e0b',
+      joint: '#e0e7ff',
+      label: '',
+    };
+
     const pts = landmarks.map((pt) => ({
       x: (1 - pt.x) * width,
       y: pt.y * height,
     }));
 
     ctx.save();
-    ctx.strokeStyle = 'rgba(99, 102, 241, 0.75)';
-    ctx.lineWidth   = 2.5 * scale;
+    ctx.strokeStyle = t.line;
+    ctx.lineWidth   = 2.6 * scale;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
 
     for (const [a, b] of this.HAND_CONNECTIONS) {
       ctx.beginPath();
@@ -306,19 +361,30 @@ export class DrawingBoard {
       ctx.beginPath();
       if (i === 8) {
         ctx.arc(p.x, p.y, 7 * scale, 0, Math.PI * 2);
-        ctx.fillStyle   = '#06b6d4';
-        ctx.shadowColor = '#06b6d4';
-        ctx.shadowBlur  = 10 * scale;
+        ctx.fillStyle   = t.indexTip;
+        ctx.shadowColor = t.indexTip;
+        ctx.shadowBlur  = 12 * scale;
       } else if (i === 4) {
         ctx.arc(p.x, p.y, 6 * scale, 0, Math.PI * 2);
-        ctx.fillStyle  = '#f59e0b';
+        ctx.fillStyle  = t.thumbTip;
         ctx.shadowBlur = 0;
       } else {
         ctx.arc(p.x, p.y, 3.5 * scale, 0, Math.PI * 2);
-        ctx.fillStyle  = '#e0e7ff';
+        ctx.fillStyle  = t.joint;
         ctx.shadowBlur = 0;
       }
       ctx.fill();
+    }
+
+    // 绘制手部标签（如“右手”/“左手”）
+    if (showLabel && t.label && pts[0]) {
+      const wrist = pts[0];
+      ctx.font = `bold ${Math.round(11 * scale)}px sans-serif`;
+      ctx.fillStyle = t.indexTip;
+      ctx.textAlign = 'center';
+      ctx.shadowBlur = 6 * scale;
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillText(t.label, wrist.x, wrist.y + 22 * scale);
     }
 
     ctx.restore();
