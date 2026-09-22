@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>手势交互画板 - Gesture Interactive Board</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app" class="app-container">
+      <!-- 隐藏或画中画视频源 -->
+      <div id="video-container" class="video-preview-wrapper hidden">
+        <video id="webcam-video" playsinline autoplay muted></video>
+        <canvas id="pip-canvas" class="pip-canvas"></canvas>
+        <span class="video-badge">摄像头输入 (镜像)</span>
+      </div>
+
+      <!-- 画布层叠结构 -->
+      <div class="canvas-viewport" id="canvas-viewport">
+        <!-- 基础画图图层 -->
+        <canvas id="drawing-canvas"></canvas>
+        <!-- 手势骨骼与交互反馈图层 -->
+        <canvas id="landmark-canvas"></canvas>
+      </div>
+
+      <!-- 虚拟手势光标 -->
+      <div id="virtual-cursor" class="virtual-cursor">
+        <div class="cursor-dot"></div>
+        <div class="cursor-ring"></div>
+        <div class="cursor-label" id="cursor-label">食指指引</div>
+      </div>
+
+      <!-- 顶部浮动工具栏 -->
+      <header class="toolbar-header">
+        <div class="toolbar-card">
+          <div class="brand-section">
+            <span class="brand-icon">✨</span>
+            <span class="brand-title">Gesture Canvas</span>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- 模式与工具按钮 -->
+          <div class="tools-group">
+            <button class="tool-btn active" data-tool="brush" title="画笔 (捏合起笔)">
+              <span class="icon">✏️</span>
+              <span class="label">画笔</span>
+            </button>
+            <button class="tool-btn" data-tool="pointer" title="纯交互指针模式">
+              <span class="icon">👆</span>
+              <span class="label">指针</span>
+            </button>
+            <button class="tool-btn" data-tool="eraser" title="橡皮擦">
+              <span class="icon">🧹</span>
+              <span class="label">橡皮擦</span>
+            </button>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- 笔触颜色选项 -->
+          <div class="color-palette" id="color-palette">
+            <button class="color-btn active" style="--color: #3b82f6" data-color="#3b82f6"></button>
+            <button class="color-btn" style="--color: #ef4444" data-color="#ef4444"></button>
+            <button class="color-btn" style="--color: #10b981" data-color="#10b981"></button>
+            <button class="color-btn" style="--color: #f59e0b" data-color="#f59e0b"></button>
+            <button class="color-btn" style="--color: #8b5cf6" data-color="#8b5cf6"></button>
+            <button class="color-btn" style="--color: #ffffff" data-color="#ffffff"></button>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- 笔触粗细 -->
+          <div class="size-slider-wrapper">
+            <label for="brush-size" class="slider-label">粗细</label>
+            <input type="range" id="brush-size" min="2" max="40" value="6" />
+            <span id="brush-size-display" class="size-val">6px</span>
+          </div>
+
+          <div class="divider"></div>
+
+          <!-- 操作按钮 -->
+          <div class="actions-group">
+            <button id="btn-undo" class="action-btn" title="撤销">
+              <span class="icon">↩️</span>
+            </button>
+            <button id="btn-clear" class="action-btn danger" title="清空画布">
+              <span class="icon">🗑️</span>
+            </button>
+            <button id="btn-toggle-camera" class="action-btn" title="显示/隐藏摄像头画中画">
+              <span class="icon">📷</span>
+            </button>
+            <button id="btn-toggle-skeleton" class="action-btn active" title="显示/隐藏手势骨骼点">
+              <span class="icon">🦴</span>
+            </button>
+            <button id="btn-open-recorder" class="action-btn highlight" title="录制专属手势并绑定事件">
+              <span class="icon">🪄</span>
+              <span class="label">录制手势</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- 实时手势与系统状态 HUD -->
+      <aside class="stats-hud">
+        <div class="hud-item">
+          <span class="hud-label">FPS</span>
+          <span id="hud-fps" class="hud-val">0</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">当前手势</span>
+          <span id="hud-gesture" class="hud-val highlight">等待识别</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">朝向</span>
+          <span id="hud-facing" class="hud-val">未知</span>
+        </div>
+        <div class="hud-item">
+          <span class="hud-label">状态</span>
+          <span id="hud-status" class="hud-val status-idle">准备就绪</span>
+        </div>
+      </aside>
+
+      <!-- 动作触发浮动提示 Toast -->
+      <div id="action-toast" class="action-toast hidden">
+        <span class="toast-icon">✨</span>
+        <span id="toast-text" class="toast-text">触发手势动作</span>
+      </div>
+
+      <!-- 手势指南提示卡片 -->
+      <aside class="gesture-guide-card">
+        <div class="guide-title">
+          <span>🖐️ 手势操作速查</span>
+          <button id="btn-close-guide" class="guide-close-btn">×</button>
+        </div>
+        <ul class="guide-list">
+          <li><strong>👉 单伸食指</strong>：控制光标移动 (悬停)</li>
+          <li><strong>🤏 食指+大拇指捏合</strong>：下笔画图 / 点击按钮</li>
+          <li><strong>🖐️ 手心朝前左右滑动</strong>：橡皮擦抹除笔迹 (板擦)</li>
+          <li><strong>🤚 手背朝前挥动</strong>：防误触悬停 (不擦除)</li>
+          <li><strong>🪄 自定义手势</strong>：如勾手触发画布放大</li>
+          <li><strong>✊ 握拳</strong>：暂停操作 / 静止指针</li>
+        </ul>
+      </aside>
+
+      <!-- 自定义手势录制工坊模态框 -->
+      <div id="recorder-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div class="modal-title">
+              <span class="icon">🪄</span>
+              <span>手势录制工坊 (Gesture Studio)</span>
+            </div>
+            <button id="btn-close-recorder" class="modal-close-btn">×</button>
+          </div>
+
+          <div class="modal-body">
+            <p class="modal-desc">
+              在摄像头前摆出您喜欢的专属姿态（例如：<strong>单指勾手</strong>、比心、OK 等），录制后绑定对应功能，即可隔空触发！
+            </p>
+
+            <div class="recorder-form">
+              <div class="form-row">
+                <label for="record-gesture-name">手势名称</label>
+                <input type="text" id="record-gesture-name" value="勾手放大手势" placeholder="例如：勾手拉近" />
+              </div>
+
+              <div class="form-row">
+                <label for="record-gesture-action">绑定触发动作</label>
+                <select id="record-gesture-action">
+                  <option value="zoom_in" selected>🔍 画布前来放大 (Zoom In)</option>
+                  <option value="zoom_out">🔎 画布推远缩小 (Zoom Out)</option>
+                  <option value="reset_view">🔄 重置画布视角 (100%)</option>
+                  <option value="undo">↩️ 撤销上一步笔迹</option>
+                  <option value="clear">🗑️ 一键清空全屏画板</option>
+                  <option value="cycle_color">🎨 轮换下一个笔触颜色</option>
+                </select>
+              </div>
+
+              <div class="record-control-area">
+                <button id="btn-start-record" class="btn-record-action">
+                  <span>⏺️ 开始录制手势 (保持姿势)</span>
+                </button>
+                <div class="progress-track">
+                  <div id="record-progress-bar" class="progress-bar"></div>
+                </div>
+                <div id="record-status-text" class="record-status idle">
+                  准备就绪，点击上方按钮后请在摄像头前保持手势
+                </div>
+              </div>
+            </div>
+
+            <div class="modal-section-title">
+              <span>📋 已录制的手势库</span>
+            </div>
+            <div id="recorded-gesture-list" class="gesture-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 启动加载与权限授权遮罩 -->
+      <div id="start-overlay" class="start-overlay">
+        <div class="start-card">
+          <div class="start-icon">🔮</div>
+          <h2>手势识别与交互画板</h2>
+          <p>
+            通过网页前置摄像头实时追踪手部关键点，支持<strong>隔空指引光标</strong>与<strong>捏合手势绘图/点击</strong>。
+          </p>
+          <div class="permission-note">
+            请允许浏览器访问您的摄像头以开启手势捕捉。
+          </div>
+          <button id="btn-start" class="btn-primary">
+            <span>开启摄像头并启动</span>
+          </button>
+          <div id="loading-spinner" class="loading-state hidden">
+            <div class="spinner"></div>
+            <p id="loading-msg">正在加载 MediaPipe 手势识别模型...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
