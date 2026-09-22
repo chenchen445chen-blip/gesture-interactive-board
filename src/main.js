@@ -68,6 +68,7 @@ class GestureApp {
         this.isCurrentlyPanning = false;
         this.lastPanPos         = null;
         this.lastPinchRatio     = null;
+        this.detector?.motion?.reset();
         const modeName = document.querySelector(`.mode-btn[data-mode="${mode}"] .mode-name`)?.textContent ?? mode;
         this.showToast(`已切换至「${modeName}」模式`);
       },
@@ -88,10 +89,10 @@ class GestureApp {
   // ═══════════════════════════════════════════════════════
 
   initCameraFab() {
-    this.fabEl.addEventListener('click', () => {
+    this.fabEl.onclick = () => {
       if (this.isGestureRunning) this.stopGesture();
       else this.startGesture();
-    });
+    };
   }
 
   setFabState(state, msg = '') {
@@ -140,6 +141,10 @@ class GestureApp {
 
   stopGesture() {
     this.isGestureRunning = false;
+    if (this.rafId) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
     this.cameraManager.stopCamera();
     this.drawingBoard.renderLandmarks([], false);
     this.virtualCursor.setVisible(false);
@@ -167,15 +172,24 @@ class GestureApp {
         this.virtualCursor.update(screenPos, classification, eraserRadius, this.currentMode);
         this.drawingBoard.renderLandmarks(rawLandmarks, this.showSkeleton);
 
-        // ── 动态手势动作（优先于静态模式处理） ──
-        if (motionAction) {
-          this._handleMotionAction(motionAction, screenPos);
-        } else {
-          switch (this.currentMode) {
-            case 'draw':   this._handleDrawMode(classification, screenPos, eraserRadius); break;
-            case 'canvas': this._handleCanvasMode(classification, screenPos); break;
-            case 'select': this._handleSelectMode(classification, screenPos); break;
-          }
+        // ── 根据当前模式分发交互逻辑 ──
+        switch (this.currentMode) {
+          case 'draw':
+            this._handleDrawMode(classification, screenPos, eraserRadius);
+            break;
+
+          case 'canvas':
+            // 动态手势动作（四指勾入放大、展开缩小、滑动平移）仅在画布控制模式生效
+            if (motionAction) {
+              this._handleMotionAction(motionAction, screenPos);
+            } else {
+              this._handleCanvasMode(classification, screenPos);
+            }
+            break;
+
+          case 'select':
+            this._handleSelectMode(classification, screenPos);
+            break;
         }
       } else {
         this._onHandLost();
@@ -183,7 +197,9 @@ class GestureApp {
     } catch (err) {
       console.error('推理异常:', err);
     } finally {
-      requestAnimationFrame(() => this.loop());
+      if (this.isGestureRunning) {
+        this.rafId = requestAnimationFrame(() => this.loop());
+      }
     }
   }
 
@@ -283,6 +299,9 @@ class GestureApp {
    * 所有模式均响应（动态动作优先级高于静态模式）
    */
   _handleMotionAction(action, screenPos) {
+    // 严格限制：仅在画布控制模式下响应画布动态手势
+    if (this.currentMode !== 'canvas') return;
+
     const cx = screenPos?.x ?? window.innerWidth / 2;
     const cy = screenPos?.y ?? window.innerHeight / 2;
 
@@ -445,4 +464,16 @@ class GestureApp {
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => new GestureApp());
+// 兼容 DOM 初始加载与 Vite HMR 模块热重载
+function initApp() {
+  if (window.__gestureAppInstance) {
+    try { window.__gestureAppInstance.stopGesture(); } catch (_) {}
+  }
+  window.__gestureAppInstance = new GestureApp();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}

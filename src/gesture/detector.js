@@ -14,9 +14,12 @@ export class GestureDetector {
     this.smoother    = new CoordinateSmoother(0.4);
     this.motion      = new MotionDetector({ windowSize: 12, cooldownMs: 900 });
     this.isReady     = false;
+    this.lastTimestamp = -1;
     this.lastVideoTime = -1;
     this.lastResult  = null;
     this.lostFrameCount = 0;
+    this.isProcessing = false;
+    this.lastDetectTime = 0;
   }
 
   /**
@@ -43,9 +46,9 @@ export class GestureDetector {
         },
         runningMode: 'VIDEO',
         numHands: 2, // 允许双手检测，避免单手因角度偏转判定失败
-        minHandDetectionConfidence: 0.4, // 适当降低置信度门槛，增强倾斜/边缘抓取能力
-        minHandPresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
+        minHandDetectionConfidence: 0.3, // 提高抓取灵敏度，更易捕捉
+        minHandPresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
       });
     } catch (gpuErr) {
       console.warn('GPU 加速初始化失败，尝试切换至 CPU (WASM SIMD) 模式:', gpuErr);
@@ -58,9 +61,9 @@ export class GestureDetector {
         },
         runningMode: 'VIDEO',
         numHands: 2,
-        minHandDetectionConfidence: 0.4,
-        minHandPresenceConfidence: 0.4,
-        minTrackingConfidence: 0.4,
+        minHandDetectionConfidence: 0.3,
+        minHandPresenceConfidence: 0.3,
+        minTrackingConfidence: 0.3,
       });
     }
 
@@ -79,23 +82,39 @@ export class GestureDetector {
     if (!this.isReady || !this.handLandmarker) return null;
     if (videoElement.readyState < 2 || videoElement.paused) return this.lastResult;
 
-    // 当在高刷屏幕 (如 Mac ProMotion 120Hz) 下 loop 频率远高于摄像头 30fps 时，复用上一帧有效检测，避免闪烁清屏
-    if (videoElement.currentTime === this.lastVideoTime) {
+    // 严格限流门控：上一帧推理未结束，或者距上次推理不足 30ms 且视频未变时复用，避免 120Hz 循环卡死
+    const now = performance.now();
+    const timeDelta = now - this.lastDetectTime;
+    const isVideoChanged = videoElement.currentTime !== this.lastVideoTime;
+
+    if (this.isProcessing || (timeDelta < 30 && !isVideoChanged)) {
       return this.lastResult;
     }
 
+    this.lastDetectTime = now;
     this.lastVideoTime = videoElement.currentTime;
+    this.isProcessing = true;
+
+    // MediaPipe detectForVideo 强约束：timestamp 必须严格单调递增
+    let safeTimestamp = typeof timestamp === 'number' && !isNaN(timestamp) ? timestamp : performance.now();
+    if (this.lastTimestamp >= 0 && safeTimestamp <= this.lastTimestamp) {
+      safeTimestamp = this.lastTimestamp + 1;
+    }
+    this.lastTimestamp = safeTimestamp;
 
     let result = null;
     try {
-      result = this.handLandmarker.detectForVideo(videoElement, timestamp);
+      result = this.handLandmarker.detectForVideo(videoElement, safeTimestamp);
     } catch (inferErr) {
       console.warn('推理帧跳过:', inferErr);
       return this.lastResult;
+    } finally {
+      this.isProcessing = false;
     }
 
     if (!result?.landmarks || result.landmarks.length === 0) {
       this.lostFrameCount++;
+      // 平滑丢帧缓冲（6帧以内的短暂遮挡或快速移动不丢弃结果）
       if (this.lostFrameCount < 6 && this.lastResult) return this.lastResult;
       this.smoother.reset();
       this.motion.reset();

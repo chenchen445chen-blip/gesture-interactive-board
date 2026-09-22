@@ -42,11 +42,19 @@ export class CameraManager {
       this.video.srcObject = this.stream;
 
       return new Promise((resolve) => {
-        this.video.onloadedmetadata = () => {
-          this.video.play();
+        const onReady = async () => {
+          try {
+            await this.video.play();
+          } catch (_) {}
           this.isPlaying = true;
           resolve(this.video);
         };
+
+        if (this.video.readyState >= 2) {
+          onReady();
+        } else {
+          this.video.onloadeddata = onReady;
+        }
       });
     } catch (err) {
       console.error('无法启动摄像头:', err);
