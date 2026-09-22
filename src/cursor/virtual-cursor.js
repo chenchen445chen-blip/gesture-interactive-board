@@ -27,8 +27,9 @@ export class VirtualCursor {
    * @param {{x: number, y: number}} pos 屏幕实际像素坐标
    * @param {Object} classification 分类结果 { gesture, isPinching, isOpenPalm }
    * @param {number} eraserRadius 橡皮擦半径
+   * @param {string} currentMode 当前交互模式 'draw' | 'canvas' | 'select'
    */
-  update(pos, classification, eraserRadius = 55) {
+  update(pos, classification, eraserRadius = 55, currentMode = 'draw') {
     this.setVisible(true);
     this.x = pos.x;
     this.y = pos.y;
@@ -36,29 +37,54 @@ export class VirtualCursor {
     // 移动光标 DOM
     this.cursor.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
 
-    // 更新手势标签文本
+    // 更新手势标签文本（根据模式差异化显示）
     if (this.label) {
       const facingTag = classification.facing === 'PALM' ? ' · 手心' : (classification.facing === 'BACK' ? ' · 手背' : '');
-      const gestureMap = {
-        PINCH: '🤏 捏合 (下笔/点击)',
-        POINTING: '👉 食指指引',
-        FIST: '✊ 握拳 (暂停)',
-        OPEN_PALM: '🖐️ 橡皮擦 (滑动擦除)',
-        BACK_HAND: '🤚 手背朝前 (悬浮)',
-        PEACE: '✌️ 剪刀手',
-        TRACKING: '🔍 追踪中',
+      const gestureMapByMode = {
+        draw: {
+          PINCH: '🤏 捏合→作画',
+          POINTING: '👉 食指悬停',
+          FIST: '✊ 握拳 (暂停)',
+          OPEN_PALM: '🖐️ 手掌→橡皮擦',
+          BACK_HAND: '🤚 手背→防误触',
+          PEACE: '✌️ 剪刀手',
+          TRACKING: '🔍 追踪中',
+        },
+        canvas: {
+          PINCH: '🤏 捏合→点击',
+          POINTING: '👉 食指悬停',
+          FIST: '✊ 握拳 (暂停)',
+          OPEN_PALM: '🖐️ 手掌→平移画布',
+          BACK_HAND: '🤚 手背→防误触',
+          PEACE: '✌️ 剪刀手',
+          TRACKING: '🔍 追踪中',
+        },
+        select: {
+          PINCH: '🤏 捏合→选中',
+          POINTING: '👉 食指移动',
+          FIST: '✊ 握拳 (暂停)',
+          OPEN_PALM: '🖐️ 手掌→取消',
+          BACK_HAND: '🤚 手背→悬停',
+          PEACE: '✌️ 剪刀手',
+          TRACKING: '🔍 追踪中',
+        },
       };
-      const baseText = gestureMap[classification.gesture] || classification.gesture;
+      const map = gestureMapByMode[currentMode] ?? gestureMapByMode.draw;
+      const baseText = map[classification.gesture] || classification.gesture;
       this.label.textContent = `${baseText}${facingTag}`;
     }
 
     const wasPinching = this.isPinching;
     this.isPinching = classification.isPinching;
-    const isErasing = classification.isOpenPalm;
+    const isErasing = classification.isOpenPalm && currentMode === 'draw';
+    const isPanning = classification.isOpenPalm && currentMode === 'canvas';
+    const isSelecting = classification.isPinching && currentMode === 'select';
+
+    // 清除所有模式 class
+    this.cursor.classList.remove('erasing', 'pinching', 'panning', 'selecting');
 
     if (isErasing) {
       this.cursor.classList.add('erasing');
-      this.cursor.classList.remove('pinching');
       // 动态将橡皮擦环设为手掌擦除范围大小
       const ring = this.cursor.querySelector('.cursor-ring');
       if (ring) {
@@ -68,7 +94,6 @@ export class VirtualCursor {
         ring.style.top = `${-eraserRadius + 16}px`;
       }
     } else {
-      this.cursor.classList.remove('erasing');
       const ring = this.cursor.querySelector('.cursor-ring');
       if (ring) {
         ring.style.width = '';
@@ -77,15 +102,17 @@ export class VirtualCursor {
         ring.style.top = '';
       }
 
-      if (this.isPinching) {
+      if (isPanning) {
+        this.cursor.classList.add('panning');
+      } else if (isSelecting) {
+        this.cursor.classList.add('selecting');
+      } else if (this.isPinching) {
         this.cursor.classList.add('pinching');
-      } else {
-        this.cursor.classList.remove('pinching');
       }
     }
 
-    // 仅在非大面积擦除状态时才执行精准的微小按钮悬浮检测
-    if (!isErasing) {
+    // 仅在非大面积擦除/平移状态时才执行精准的微小按钮悬浮检测
+    if (!isErasing && !isPanning) {
       this.handleHitTest(pos, wasPinching, this.isPinching);
     }
   }

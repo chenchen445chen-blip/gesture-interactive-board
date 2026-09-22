@@ -1,6 +1,7 @@
 import { HandLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { GestureClassifier } from './classifier.js';
 import { CoordinateSmoother } from './filter.js';
+import { MotionDetector } from './motion-detector.js';
 
 /**
  * 手势检测主控制器 (GestureDetector)
@@ -9,11 +10,12 @@ import { CoordinateSmoother } from './filter.js';
 export class GestureDetector {
   constructor() {
     this.handLandmarker = null;
-    this.classifier = new GestureClassifier();
-    this.smoother = new CoordinateSmoother(0.4);
-    this.isReady = false;
+    this.classifier  = new GestureClassifier();
+    this.smoother    = new CoordinateSmoother(0.4);
+    this.motion      = new MotionDetector({ windowSize: 12, cooldownMs: 900 });
+    this.isReady     = false;
     this.lastVideoTime = -1;
-    this.lastResult = null;
+    this.lastResult  = null;
     this.lostFrameCount = 0;
   }
 
@@ -94,36 +96,32 @@ export class GestureDetector {
 
     if (!result?.landmarks || result.landmarks.length === 0) {
       this.lostFrameCount++;
-      // 短暂丢失 6 帧内（约 100ms）保持上一帧位置，避免手部轻微抖动造成绘制中断
-      if (this.lostFrameCount < 6 && this.lastResult) {
-        return this.lastResult;
-      }
+      if (this.lostFrameCount < 6 && this.lastResult) return this.lastResult;
       this.smoother.reset();
+      this.motion.reset();
       this.lastResult = null;
       return null;
     }
 
     this.lostFrameCount = 0;
 
-    // 默认追踪第一只检测到的手
-    const rawLandmarks = result.landmarks[0];
-    const handedness = result.handedness?.[0]?.[0]?.categoryName || 'Right';
+    const rawLandmarks  = result.landmarks[0];
+    const handedness     = result.handedness?.[0]?.[0]?.categoryName || 'Right';
     const classification = this.classifier.classify(rawLandmarks, handedness);
 
-    // 坐标锚点选择：张开手掌时使用手掌几何中心作为大面积板擦中心，其余手势使用食指尖
+    // 动态动作检测（帧间轨迹分析）
+    const motionResult = this.motion.update(rawLandmarks, classification);
+
+    // 坐标锚点：张开手掌用手掌中心，其余用食指尖
     const targetPoint = classification.isOpenPalm && classification.palmCenter
       ? classification.palmCenter
       : (classification.indexTip || rawLandmarks[8] || rawLandmarks[0]);
 
-    // 屏幕镜像映射转换：
-    // 摄像头的 x 是 0(左)~1(右)，因为用户习惯镜像操作，所以 x 坐标做翻转 1 - x
+    // 镜像映射
     const rawX = (1 - targetPoint.x) * viewport.width;
     const rawY = targetPoint.y * viewport.height;
-
-    // 平滑滤波，防止细微抖动
     const smoothedPos = this.smoother.smooth({ x: rawX, y: rawY });
 
-    // 计算橡皮擦半径（根据手掌大小动态计算，范围 45px ~ 110px）
     const estimatedRadius = classification.palmSize
       ? Math.max(45, Math.min(110, classification.palmSize * viewport.width * 0.35))
       : 60;
@@ -132,6 +130,8 @@ export class GestureDetector {
       rawLandmarks,
       allHandsLandmarks: result.landmarks,
       classification,
+      motionAction: motionResult?.action ?? null,     // 动态动作名称
+      motionConfidence: motionResult?.confidence ?? 0,
       screenPos: smoothedPos,
       eraserRadius: Math.round(estimatedRadius),
       handedness,
@@ -141,4 +141,3 @@ export class GestureDetector {
     return this.lastResult;
   }
 }
-
