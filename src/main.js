@@ -159,6 +159,9 @@ class GestureApp {
       this.isGestureRunning = true;
       this.setFabState('running');
       this.statsHud.updateState('TRACKING', '实时追踪中');
+      // 启动时确保白色画布居中对齐，并保持在画笔作画模式
+      this.toolbar.applyMode('draw');
+      this.drawingBoard.resetView();
       this.loop();
     } catch (err) {
       console.error('手势识别启动异常:', err);
@@ -369,12 +372,15 @@ class GestureApp {
 
     // ── 单手模式（已彻底去除单手放大缩小与勾手缩放） ──
     if (classification.isOpenPalm) {
-      // 单手手掌张开 → 平移画布
+      // 单手手掌张开 → 平移画布（带死区与单步位移限幅，杜绝甩飞画布）
       if (this.lastPanPos) {
-        this.drawingBoard.panBy(
-          screenPos.x - this.lastPanPos.x,
-          screenPos.y - this.lastPanPos.y
-        );
+        const rawDx = screenPos.x - this.lastPanPos.x;
+        const rawDy = screenPos.y - this.lastPanPos.y;
+        if (Math.hypot(rawDx, rawDy) > 4) {
+          const clampedDx = Math.max(-28, Math.min(28, rawDx * 0.75));
+          const clampedDy = Math.max(-28, Math.min(28, rawDy * 0.75));
+          this.drawingBoard.panBy(clampedDx, clampedDy);
+        }
       }
       this.lastPanPos     = { x: screenPos.x, y: screenPos.y };
       this.isCurrentlyPanning = true;

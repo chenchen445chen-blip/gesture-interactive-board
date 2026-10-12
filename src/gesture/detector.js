@@ -33,35 +33,28 @@ export class GestureDetector {
   async init(onProgress) {
     if (this.isReady) return;
 
-    if (onProgress) onProgress('正在准备 MediaPipe WASM 运行环境...');
-    const vision = await FilesetResolver.forVisionTasks(
-      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-    );
-
-    if (onProgress) onProgress('正在加载手部关键点神经网络模型...');
-
-    // 优先尝试 GPU，若在特定 Mac 浏览器环境 WebGL 异常则自动降级到 CPU (WASM SIMD)
+    if (onProgress) onProgress('正在加载本地 MediaPipe WASM 运行环境...');
+    
+    // 优先使用本地离线静态资源
+    let vision;
     try {
-      this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      vision = await FilesetResolver.forVisionTasks('/mediapipe/wasm');
+    } catch (wasmErr) {
+      console.warn('本地 WASM 加载异常，回退至远程 CDN:', wasmErr);
+      vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+    }
+
+    if (onProgress) onProgress('正在加载本地手部视觉神经网络模型...');
+    const localModelPath = '/mediapipe/models/hand_landmarker.task';
+    const remoteModelPath = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+
+    const createLandmarker = async (delegate, modelPath) => {
+      return HandLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numHands: 2, // 允许双手检测，避免单手因角度偏转判定失败
-        minHandDetectionConfidence: 0.3, // 提高抓取灵敏度，更易捕捉
-        minHandPresenceConfidence: 0.3,
-        minTrackingConfidence: 0.3,
-      });
-    } catch (gpuErr) {
-      console.warn('GPU 加速初始化失败，尝试切换至 CPU (WASM SIMD) 模式:', gpuErr);
-      if (onProgress) onProgress('切换至高兼容 CPU 模式...');
-      this.handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-          delegate: 'CPU',
+          modelAssetPath: modelPath,
+          delegate,
         },
         runningMode: 'VIDEO',
         numHands: 2,
@@ -69,6 +62,23 @@ export class GestureDetector {
         minHandPresenceConfidence: 0.3,
         minTrackingConfidence: 0.3,
       });
+    };
+
+    // 优先尝试本地模型 + GPU 加速，支持自动降级
+    try {
+      this.handLandmarker = await createLandmarker('GPU', localModelPath);
+    } catch (gpuErr) {
+      console.warn('GPU 加速或本地模型初试异常，尝试 CPU (WASM SIMD) 本地加载:', gpuErr);
+      if (onProgress) onProgress('切换至 CPU 模式加载本地模型...');
+      try {
+        this.handLandmarker = await createLandmarker('CPU', localModelPath);
+      } catch (cpuLocalErr) {
+        console.warn('本地模型不可用，回退至远程模型:', cpuLocalErr);
+        if (onProgress) onProgress('正在从远程拉取模型...');
+        this.handLandmarker = await createLandmarker('GPU', remoteModelPath).catch(() =>
+          createLandmarker('CPU', remoteModelPath)
+        );
+      }
     }
 
     this.isReady = true;

@@ -132,6 +132,7 @@ export class DrawingBoard {
   panBy(dx, dy) {
     this.viewX += dx;
     this.viewY += dy;
+    this._clampViewBounds();
     this.applyViewTransform();
   }
 
@@ -142,14 +143,38 @@ export class DrawingBoard {
    * @param {number} screenY 缩放中心屏幕 Y
    */
   zoomAt(factor, screenX, screenY) {
-    const newScale = Math.max(0.05, Math.min(16.0, this.viewScale * factor));
+    // 约束缩放比例在舒适视觉区间 35% ~ 300%，杜绝飙升至 900%+ 导致画布移出视口
+    const newScale = Math.max(0.35, Math.min(3.0, this.viewScale * factor));
     // 保持光标下的文档点不变
     const cx = (screenX - this.viewX) / this.viewScale;
     const cy = (screenY - this.viewY) / this.viewScale;
     this.viewX = screenX - cx * newScale;
     this.viewY = screenY - cy * newScale;
     this.viewScale = newScale;
+    this._clampViewBounds();
     this.applyViewTransform();
+  }
+
+  /** 视口安全边界约束：锁定白色画布中心在可视区内，保证画布大部分始终居中可见，绝不飘飞 */
+  _clampViewBounds() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cw = this.CANVAS_W * this.viewScale;
+    const ch = this.CANVAS_H * this.viewScale;
+
+    // 画布中心必须保持在视口核心 60% 区域内
+    const minCenterX = vw * 0.25;
+    const maxCenterX = vw * 0.75;
+    const minCenterY = vh * 0.25;
+    const maxCenterY = vh * 0.75;
+
+    const minX = minCenterX - cw * 0.5;
+    const maxX = maxCenterX - cw * 0.5;
+    const minY = minCenterY - ch * 0.5;
+    const maxY = maxCenterY - ch * 0.5;
+
+    this.viewX = Math.max(minX, Math.min(maxX, this.viewX));
+    this.viewY = Math.max(minY, Math.min(maxY, this.viewY));
   }
 
   zoomIn(step = 0.2, sx, sy) {

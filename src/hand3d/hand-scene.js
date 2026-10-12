@@ -80,6 +80,7 @@ export class Hand3DScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = false;
+    this.renderer.setClearColor(0x000000, 0); // 确保 100% 透明，完全透出底层白色画布与纸张投影
 
     // 设置拟真人体皮肤照明光影系统
     this._setupLighting();
@@ -125,22 +126,26 @@ export class Hand3DScene {
         roughness: 0.55,
         metalness: 0.05,
         flatShading: false,
+        side: THREE.DoubleSide,
       }),
       finger: new THREE.MeshStandardMaterial({
         color: 0xefbe9b,
         roughness: 0.5,
         metalness: 0.05,
         flatShading: false,
+        side: THREE.DoubleSide,
       }),
       joint: new THREE.MeshStandardMaterial({
         color: 0xeaa988, // 关节处微红，模拟真实软骨与血液微循环
         roughness: 0.6,
         metalness: 0.04,
+        side: THREE.DoubleSide,
       }),
       nail: new THREE.MeshStandardMaterial({
         color: 0xffe4db,
         roughness: 0.25,
         metalness: 0.1, // 指甲盖光泽感
+        side: THREE.DoubleSide,
       }),
     };
 
@@ -150,11 +155,13 @@ export class Hand3DScene {
         color: 0x1e293b,
         roughness: 0.2,
         metalness: 0.85,
+        side: THREE.DoubleSide,
       }),
       finger: new THREE.MeshStandardMaterial({
         color: 0x334155,
         roughness: 0.25,
         metalness: 0.9,
+        side: THREE.DoubleSide,
       }),
       joint: new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
@@ -162,6 +169,7 @@ export class Hand3DScene {
         emissiveIntensity: 0.8,
         roughness: 0.2,
         metalness: 0.5,
+        side: THREE.DoubleSide,
       }),
       nail: new THREE.MeshStandardMaterial({
         color: 0x06b6d4,
@@ -169,6 +177,7 @@ export class Hand3DScene {
         emissiveIntensity: 1.0,
         roughness: 0.1,
         metalness: 0.3,
+        side: THREE.DoubleSide,
       }),
     };
 
@@ -185,6 +194,15 @@ export class Hand3DScene {
       color: 0x38bdf8,
       transparent: true,
       opacity: 0.85,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    // 5. 橡皮擦范围指示环材质
+    this.materials.eraserField = new THREE.MeshBasicMaterial({
+      color: 0xf43f5e,
+      transparent: true,
+      opacity: 0.55,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
@@ -276,6 +294,11 @@ export class Hand3DScene {
     pinchHaloMesh.visible = false;
     group.add(pinchHaloMesh);
 
+    // 7. 橡皮擦范围光环 (Eraser Radius Ring)
+    const eraserMesh = new THREE.Mesh(this.sharedGeometries.ring, this.materials.eraserField);
+    eraserMesh.visible = false;
+    group.add(eraserMesh);
+
     return {
       group,
       handedness,
@@ -284,6 +307,7 @@ export class Hand3DScene {
       wristMesh,
       shadowMesh,
       pinchHaloMesh,
+      eraserMesh,
       gltfWrapper,
       gltfModel: null,
       gltfBones: [],
@@ -294,32 +318,37 @@ export class Hand3DScene {
   // 构造真实厚度手掌网格
   _createPalmMesh(material) {
     const geom = new THREE.BufferGeometry();
-    // 掌心由 0 (手腕), 1 (拇指根), 5 (食指根), 9 (中指根), 13 (无名指根), 17 (小指根) 及掌心中心构成
-    // 正反两面形成掌心厚度，共 14 个顶点，16 个三角形
+    // 掌心由 6 个外围关键点 (0, 1, 5, 9, 13, 17) 及中心构成，正反双层共 14 个顶点
     const vertexCount = 14;
     const positions = new Float32Array(vertexCount * 3);
     const normals = new Float32Array(vertexCount * 3);
     const uvs = new Float32Array(vertexCount * 2);
 
-    // 索引缓冲: 手掌正反双面及侧边厚度
+    // 索引缓冲: 手背扇形(0~6) + 手心扇形(7~13) + 侧边厚度缝合
     const indices = [
       // 正面 (手背)
-      0, 1, 5,
-      0, 5, 9,
-      0, 9, 13,
-      0, 13, 17,
-      // 反面 (手心)
-      7, 12, 8,
-      7, 13, 12,
-      7, 14, 13,
-      7, 15, 14,
-      // 侧边缝合
-      0, 17, 15,  0, 15, 7,
-      17, 13, 14, 17, 14, 15,
-      13, 9, 12,  13, 12, 14,
-      9, 5, 8,    9, 8, 12,
-      5, 1, 8,    1, 8, 8,
-      0, 7, 8,    0, 8, 1,
+      6, 0, 1,
+      6, 1, 2,
+      6, 2, 3,
+      6, 3, 4,
+      6, 4, 5,
+      6, 5, 0,
+
+      // 反面 (手心，法线反向)
+      13, 8, 7,
+      13, 9, 8,
+      13, 10, 9,
+      13, 11, 10,
+      13, 12, 11,
+      13, 7, 12,
+
+      // 侧边厚度缝合
+      0, 1, 8,   0, 8, 7,
+      1, 2, 9,   1, 9, 8,
+      2, 3, 10,  2, 10, 9,
+      3, 4, 11,  3, 11, 10,
+      4, 5, 12,  4, 12, 11,
+      5, 0, 7,   5, 7, 12,
     ];
 
     geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -410,69 +439,77 @@ export class Hand3DScene {
     if (!visible || !handList || handList.length === 0) {
       this.hands.Right.group.visible = false;
       this.hands.Left.group.visible = false;
-      this.renderer.clear();
+      this.renderer.clear(true, true, true);
       return;
     }
 
     // 记录本帧活跃的手
     const activeSides = { Right: false, Left: false };
 
-    handList.forEach((handData, idx) => {
-      const side = handData.handedness?.toLowerCase() === 'left' || idx === 1 ? 'Left' : 'Right';
-      const landmarks = handData.rawLandmarks;
-      if (!landmarks || landmarks.length < 21) return;
+    try {
+      handList.forEach((handData, idx) => {
+        const side = handData.handedness?.toLowerCase() === 'left' || idx === 1 ? 'Left' : 'Right';
+        const landmarks = handData.rawLandmarks;
+        if (!landmarks || landmarks.length < 21) return;
 
-      activeSides[side] = true;
-      const hand = this.hands[side];
-      hand.group.visible = true;
+        activeSides[side] = true;
+        const hand = this.hands[side];
+        hand.group.visible = true;
 
-      // 将 MediaPipe 归一化点映射到屏幕世界空间 (X 镜像翻转，Z 放大深度)
-      const rawPts3D = this._mapLandmarksToWorld(landmarks);
+        // 将 MediaPipe 归一化点映射到屏幕世界空间 (X 镜像翻转，Z 放大深度)
+        const rawPts3D = this._mapLandmarksToWorld(landmarks);
 
-      // 运动动力学指数平滑滤波 (EMA Smoothing)，彻底消除摄像头帧间噪点微抖动
-      if (!hand.smoothedPts || hand.smoothedPts.length !== rawPts3D.length) {
-        hand.smoothedPts = rawPts3D.map((p) => ({ ...p }));
-      } else {
-        const alpha = 0.46; // 兼具极致防抖与零感知延迟
-        for (let i = 0; i < rawPts3D.length; i++) {
-          hand.smoothedPts[i].x += (rawPts3D[i].x - hand.smoothedPts[i].x) * alpha;
-          hand.smoothedPts[i].y += (rawPts3D[i].y - hand.smoothedPts[i].y) * alpha;
-          hand.smoothedPts[i].z += (rawPts3D[i].z - hand.smoothedPts[i].z) * alpha;
+        // 运动动力学指数平滑滤波 (EMA Smoothing)，彻底消除摄像头帧间噪点微抖动
+        if (!hand.smoothedPts || hand.smoothedPts.length !== rawPts3D.length) {
+          hand.smoothedPts = rawPts3D.map((p) => ({ ...p }));
+        } else {
+          const alpha = 0.46; // 兼具极致防抖与零感知延迟
+          for (let i = 0; i < rawPts3D.length; i++) {
+            hand.smoothedPts[i].x += (rawPts3D[i].x - hand.smoothedPts[i].x) * alpha;
+            hand.smoothedPts[i].y += (rawPts3D[i].y - hand.smoothedPts[i].y) * alpha;
+            hand.smoothedPts[i].z += (rawPts3D[i].z - hand.smoothedPts[i].z) * alpha;
+          }
         }
+        const pts3D = hand.smoothedPts;
+
+        // 根据当前风格驱动模型
+        if (this.currentTheme === 'model' && hand.gltfModel && this.modelLoadState[side] === 'loaded') {
+          // 模式：开源 GLTF 骨骼模型
+          this._driveGltfHand(hand, pts3D, landmarks);
+          hand.gltfWrapper.visible = true;
+          this._setAnatomicalVisible(hand, false);
+        } else {
+          // 模式：3D 拟真解剖学模型 (Skin / Cyber)
+          hand.gltfWrapper.visible = false;
+          this._setAnatomicalVisible(hand, true);
+          this._driveAnatomicalHand(hand, pts3D, handData);
+        }
+      });
+
+      if (!activeSides.Right) {
+        this.hands.Right.group.visible = false;
+        this.hands.Right.smoothedPts = null;
       }
-      const pts3D = hand.smoothedPts;
-
-      // 根据当前风格驱动模型
-      if (this.currentTheme === 'model' && hand.gltfModel && this.modelLoadState[side] === 'loaded') {
-        // 模式：开源 GLTF 骨骼模型
-        this._driveGltfHand(hand, pts3D, landmarks);
-        hand.gltfWrapper.visible = true;
-        this._setAnatomicalVisible(hand, false);
-      } else {
-        // 模式：3D 拟真解剖学模型 (Skin / Cyber)
-        hand.gltfWrapper.visible = false;
-        this._setAnatomicalVisible(hand, true);
-        this._driveAnatomicalHand(hand, pts3D);
+      if (!activeSides.Left) {
+        this.hands.Left.group.visible = false;
+        this.hands.Left.smoothedPts = null;
       }
-    });
 
-    if (!activeSides.Right) {
-      this.hands.Right.group.visible = false;
-      this.hands.Right.smoothedPts = null;
+      // 渲染 Three.js 场景
+      this.renderer.render(this.scene, this.camera);
+    } catch (renderErr) {
+      console.warn('3D 手势渲染保护:', renderErr);
     }
-    if (!activeSides.Left) {
-      this.hands.Left.group.visible = false;
-      this.hands.Left.smoothedPts = null;
-    }
-
-    // 渲染 Three.js 场景
-    this.renderer.render(this.scene, this.camera);
   }
 
   _setAnatomicalVisible(hand, visible) {
     hand.palmMesh.visible = visible;
     hand.wristMesh.visible = visible;
     hand.shadowMesh.visible = visible;
+    if (!visible) {
+      if (hand.pinchHaloMesh) hand.pinchHaloMesh.visible = false;
+      if (hand.eraserMesh) hand.eraserMesh.visible = false;
+    }
     hand.fingers.forEach((f) => {
       f.knuckles.forEach((k) => (k.mesh.visible = visible));
       f.segments.forEach((s) => (s.mesh.visible = visible));
@@ -502,7 +539,7 @@ export class Hand3DScene {
   //  驱动 3D 拟真解剖学手模 (Anatomical Hand)
   // ═══════════════════════════════════════════════════════
 
-  _driveAnatomicalHand(hand, pts) {
+  _driveAnatomicalHand(hand, pts, handData = null) {
     const palmBaseScale = Math.hypot(pts[5].x - pts[17].x, pts[5].y - pts[17].y) || 100;
     const thickness = palmBaseScale * 0.16; // 拟真手掌厚度
 
@@ -614,6 +651,24 @@ export class Hand3DScene {
         hand.pinchHaloMesh.scale.set(ringScale, ringScale, 1);
       } else {
         hand.pinchHaloMesh.visible = false;
+      }
+    }
+
+    // 6. 橡皮擦范围指示环 (Eraser Field Feedback)
+    if (hand.eraserMesh) {
+      const isPalmOpen = handData?.classification?.isOpenPalm && handData?.classification?.isPalm;
+      if (isPalmOpen) {
+        hand.eraserMesh.visible = true;
+        const pWrist = pts[0];
+        const pMiddle = pts[9];
+        const cx = (pWrist.x + pMiddle.x) * 0.5;
+        const cy = (pWrist.y + pMiddle.y) * 0.5;
+        const cz = (pWrist.z + pMiddle.z) * 0.5 + 8;
+        hand.eraserMesh.position.set(cx, cy, cz);
+        const radius = handData.eraserRadius || palmBaseScale * 0.55;
+        hand.eraserMesh.scale.set(radius, radius, 1);
+      } else {
+        hand.eraserMesh.visible = false;
       }
     }
   }
