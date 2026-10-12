@@ -95,6 +95,17 @@ body, html {
   z-index: 5;
 }
 
+/* 3D 手模渲染层：WebGL Transparent Overlay */
+.hand-3d-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 6;
+}
+
 /* 摄像头画中画窗口 */
 .video-preview-wrapper {
   position: absolute;
@@ -857,3 +868,121 @@ input[type="range"]::-webkit-slider-thumb:hover {
 [data-mode="canvas"] #canvas-viewport:active {
   cursor: grabbing;
 }
+
+/* ── 3D 手模风格选择器与下拉菜单 ── */
+.hand-mode-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.hand-mode-picker .action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+}
+
+.picker-caret {
+  font-size: 10px;
+  opacity: 0.65;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-block;
+}
+
+.hand-mode-picker.open .picker-caret {
+  transform: rotate(180deg);
+}
+
+.hand-style-dropdown {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 260px;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 100;
+  animation: dropdownFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hand-style-dropdown.hidden {
+  display: none !important;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dropdown-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 6px 10px 4px;
+}
+
+.style-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.style-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.style-item.active {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.style-item .style-icon {
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.style-item .style-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.style-item .style-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.style-item .style-desc {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
+.style-item.active .style-title {
+  color: #818cf8;
+}
+

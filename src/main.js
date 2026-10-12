@@ -4,6 +4,7 @@ import { VirtualCursor } from './cursor/virtual-cursor.js';
 import { DrawingBoard } from './canvas/drawing-board.js';
 import { Toolbar } from './ui/toolbar.js';
 import { StatsHud } from './ui/stats-hud.js';
+import { Hand3DScene } from './hand3d/hand-scene.js';
 
 /**
  * 手势交互画板主应用程序
@@ -25,6 +26,7 @@ class GestureApp {
     this.videoElement   = document.getElementById('webcam-video');
     this.drawingCanvas  = document.getElementById('drawing-canvas');
     this.landmarkCanvas = document.getElementById('landmark-canvas');
+    this.hand3dCanvas   = document.getElementById('hand-3d-canvas');
     this.cursorElement  = document.getElementById('virtual-cursor');
     this.toastEl        = document.getElementById('action-toast');
     this.toastText      = document.getElementById('toast-text');
@@ -45,6 +47,7 @@ class GestureApp {
     this.lastPinchRatio     = null; // 用于画布控制模式捏合缩放
     this.currentMode        = 'draw';
     this.showSkeleton       = true;
+    this.handStyle          = 'skin'; // 默认：3D 拟真手模 ('skin' | 'model' | 'cyber' | 'skeleton')
 
     // 核心组件
     this.cameraManager = new CameraManager(this.videoElement);
@@ -52,11 +55,31 @@ class GestureApp {
     this.drawingBoard  = new DrawingBoard(this.drawingCanvas, this.landmarkCanvas);
     this.virtualCursor = new VirtualCursor(this.cursorElement);
     this.statsHud      = new StatsHud();
+    this.hand3d        = new Hand3DScene(this.hand3dCanvas);
 
     this.toolbar = new Toolbar(this.drawingBoard, {
       onToggleSkeleton: (visible) => {
         this.showSkeleton = visible;
-        if (!visible) this.drawingBoard.renderLandmarks([], false);
+        if (!visible) {
+          this.drawingBoard.renderLandmarks([], false);
+          this.hand3d.update([], false);
+        }
+      },
+      onHandStyleChange: (style) => {
+        this.handStyle = style;
+        if (style === 'skeleton') {
+          this.hand3d.update([], false);
+          this.showToast('已切换至「2D 线框骨骼」');
+        } else {
+          this.drawingBoard.renderLandmarks([], false);
+          this.hand3d.setTheme(style);
+          const styleNames = {
+            skin: '3D 拟真手模 (PBR 真实皮肤)',
+            model: '开源标准 3D 模型 (WebXR GLB)',
+            cyber: '赛博机甲 3D 手模',
+          };
+          this.showToast(`已切换至「${styleNames[style] || style}」`);
+        }
       },
       onModeChange: (mode) => {
         this.currentMode = mode;
@@ -82,6 +105,10 @@ class GestureApp {
     this.initCameraFab();
     this.initMouseAndWheel();
     this.initKeyboardShortcuts();
+
+    window.addEventListener('resize', () => {
+      this.hand3d.resize(window.innerWidth, window.innerHeight);
+    });
   }
 
   // ═══════════════════════════════════════════════════════
@@ -147,6 +174,7 @@ class GestureApp {
     }
     this.cameraManager.stopCamera();
     this.drawingBoard.renderLandmarks([], false);
+    this.hand3d.update([], false);
     this.virtualCursor.setVisible(false);
     this.statsHud.updateState('UNKNOWN', '手势已停止');
     this.setFabState('idle');
@@ -170,9 +198,16 @@ class GestureApp {
       if (result) {
         const { screenPos, motionAction, hands, isTwoHands } = result;
 
-        // 双光标与双手骨骼并行渲染
+        // 双光标与手部渲染（根据风格动态路由到 3D WebGL 模型或 2D 线框）
         this.virtualCursor.updateMulti(hands, this.currentMode);
-        this.drawingBoard.renderLandmarks(hands, this.showSkeleton);
+        if (this.handStyle === 'skeleton') {
+          this.hand3d.update([], false);
+          this.drawingBoard.renderLandmarks(hands, this.showSkeleton, true);
+        } else {
+          // 主画布渲染 3D 手模，画中画小窗保留辅助骨骼
+          this.drawingBoard.renderLandmarks(hands, this.showSkeleton, false);
+          this.hand3d.update(hands, this.showSkeleton);
+        }
 
         // ── 根据当前模式分发交互逻辑 ──
         switch (this.currentMode) {
@@ -408,7 +443,6 @@ class GestureApp {
 
   // ─── 手部离开 ──────────────────────────────────────────
   _onHandLost() {
-
     if (this.drawingBoard.isDrawing) this.drawingBoard.endStroke();
     if (this.isCurrentlyErasing) {
       this.isCurrentlyErasing = false;
@@ -418,6 +452,7 @@ class GestureApp {
     this.lastPanPos         = null;
     this.lastPinchRatio     = null;
     this.drawingBoard.renderLandmarks([], false);
+    this.hand3d.update([], false);
     this.virtualCursor.setVisible(false);
     this.statsHud.updateState('UNKNOWN', '等待手部进入视野', 'UNKNOWN');
   }

@@ -75,6 +75,10 @@ export class Toolbar {
     this.btnResetView     = document.getElementById('btn-reset-view');
     this.btnToggleCamera  = document.getElementById('btn-toggle-camera');
     this.btnToggleSkeleton= document.getElementById('btn-toggle-skeleton');
+    this.handPickerWrapper= document.getElementById('hand-mode-picker');
+    this.btnOpenHandStyles= document.getElementById('btn-open-hand-styles');
+    this.handStyleDropdown= document.getElementById('hand-style-dropdown');
+    this.handStyleItems   = document.querySelectorAll('.style-item');
 
     this.videoContainer = document.getElementById('video-container');
     this.guideCard      = document.getElementById('gesture-guide-card');
@@ -132,11 +136,49 @@ export class Toolbar {
       this.btnToggleCamera.classList.toggle('active', this.showCamera);
     });
 
-    // 骨骼显示
-    this.btnToggleSkeleton.addEventListener('click', () => {
+    // 3D 手模显隐切换
+    this.btnToggleSkeleton.addEventListener('click', (e) => {
+      // 若点击的是小箭头展开器，则只展开下拉菜单
+      if (e.target.id === 'btn-open-hand-styles') {
+        e.stopPropagation();
+        this.toggleHandStyleDropdown();
+        return;
+      }
       this.showSkeleton = !this.showSkeleton;
       this.btnToggleSkeleton.classList.toggle('active', this.showSkeleton);
       if (this.options.onToggleSkeleton) this.options.onToggleSkeleton(this.showSkeleton);
+    });
+
+    // 手模下拉菜单切换
+    this.handStyleItems.forEach((item) => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const style = item.dataset.style;
+        this.handStyleItems.forEach((i) => i.classList.remove('active'));
+        item.classList.add('active');
+
+        // 更新按钮图标
+        const iconSpan = this.btnToggleSkeleton.querySelector('.btn-icon');
+        const itemIcon = item.querySelector('.style-icon')?.textContent;
+        if (iconSpan && itemIcon) iconSpan.textContent = itemIcon;
+
+        // 若之前为隐藏状态，选择风格后自动开启显示
+        if (!this.showSkeleton) {
+          this.showSkeleton = true;
+          this.btnToggleSkeleton.classList.add('active');
+          if (this.options.onToggleSkeleton) this.options.onToggleSkeleton(true);
+        }
+
+        if (this.options.onHandStyleChange) this.options.onHandStyleChange(style);
+        this.closeHandStyleDropdown();
+      });
+    });
+
+    // 点击外部自动关闭下拉菜单
+    document.addEventListener('click', (e) => {
+      if (!this.handPickerWrapper?.contains(e.target)) {
+        this.closeHandStyleDropdown();
+      }
     });
 
     // 关闭操作指南
@@ -185,4 +227,18 @@ export class Toolbar {
       this.options.onModeChange(mode);
     }
   }
+
+  toggleHandStyleDropdown() {
+    if (!this.handStyleDropdown) return;
+    const isHidden = this.handStyleDropdown.classList.contains('hidden');
+    this.handStyleDropdown.classList.toggle('hidden', !isHidden);
+    this.handPickerWrapper?.classList.toggle('open', isHidden);
+  }
+
+  closeHandStyleDropdown() {
+    if (!this.handStyleDropdown) return;
+    this.handStyleDropdown.classList.add('hidden');
+    this.handPickerWrapper?.classList.remove('open');
+  }
 }
+

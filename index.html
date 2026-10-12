@@ -23,8 +23,9 @@
         </div>
       </div>
 
-      <!-- ② 骨骼叠加层：固定在屏幕，不受视图变换影响 -->
+      <!-- ② 骨骼与 3D 手模叠加层：固定在屏幕，不受视图变换影响 -->
       <canvas id="landmark-canvas" class="landmark-canvas"></canvas>
+      <canvas id="hand-3d-canvas" class="hand-3d-canvas"></canvas>
 
       <!-- 虚拟手势光标 -->
       <div id="virtual-cursor" class="virtual-cursor">
@@ -114,7 +115,43 @@
             <button id="btn-clear" class="action-btn danger" title="清空画布">🗑️</button>
             <button id="btn-reset-view" class="action-btn" title="重置视图 (0)">⊡</button>
             <button id="btn-toggle-camera" class="action-btn" title="摄像头预览">📷</button>
-            <button id="btn-toggle-skeleton" class="action-btn active" title="骨骼显示">🦴</button>
+            <div class="hand-mode-picker" id="hand-mode-picker">
+              <button id="btn-toggle-skeleton" class="action-btn active" title="手部模型显示 (右侧小箭头切换风格)">
+                <span class="btn-icon">🖐️</span>
+                <span class="picker-caret" id="btn-open-hand-styles">▾</span>
+              </button>
+              <div class="hand-style-dropdown hidden" id="hand-style-dropdown">
+                <div class="dropdown-header">3D 手势呈现风格</div>
+                <button class="style-item active" data-style="skin">
+                  <span class="style-icon">🖐️</span>
+                  <div class="style-info">
+                    <span class="style-title">3D 拟真手模</span>
+                    <span class="style-desc">PBR 皮肤质感与立体指节 (推荐)</span>
+                  </div>
+                </button>
+                <button class="style-item" data-style="model">
+                  <span class="style-icon">🤖</span>
+                  <div class="style-info">
+                    <span class="style-title">开源标准手模</span>
+                    <span class="style-desc">WebXR 标准 3D 骨骼模型</span>
+                  </div>
+                </button>
+                <button class="style-item" data-style="cyber">
+                  <span class="style-icon">⚡</span>
+                  <div class="style-info">
+                    <span class="style-title">赛博机甲手</span>
+                    <span class="style-desc">钛金拉丝与科技脉冲关节</span>
+                  </div>
+                </button>
+                <button class="style-item" data-style="skeleton">
+                  <span class="style-icon">🦴</span>
+                  <div class="style-info">
+                    <span class="style-title">2D 线框骨骼</span>
+                    <span class="style-desc">经典极简线条模式</span>
+                  </div>
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </header>

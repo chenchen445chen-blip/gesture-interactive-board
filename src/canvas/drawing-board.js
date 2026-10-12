@@ -257,7 +257,7 @@ export class DrawingBoard {
   //  骨骼渲染（固定在屏幕坐标，不受视图变换影响）
   // ═══════════════════════════════════════════════════════
 
-  renderLandmarks(input, visible = true) {
+  renderLandmarks(input, visible = true, renderMainScreen = true) {
     this.landmarkCtx.clearRect(0, 0, this.landmarkCanvas.width, this.landmarkCanvas.height);
 
     if (this.pipCtx && this.pipCanvas) {
@@ -311,11 +311,13 @@ export class DrawingBoard {
       const isLeft = hand.handedness?.toLowerCase() === 'left' || idx === 1;
       const theme = isLeft ? PALETTES.Left : PALETTES.Right;
 
-      this.drawSkeletonOnCtx(
-        this.landmarkCtx, hand.rawLandmarks,
-        this.landmarkCanvas.width, this.landmarkCanvas.height,
-        1.0, theme
-      );
+      if (renderMainScreen) {
+        this.drawSkeletonOnCtx(
+          this.landmarkCtx, hand.rawLandmarks,
+          this.landmarkCanvas.width, this.landmarkCanvas.height,
+          1.0, theme
+        );
+      }
 
       if (this.pipCtx && this.pipCanvas?.width > 0) {
         this.drawSkeletonOnCtx(
