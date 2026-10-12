@@ -2,13 +2,237 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 /**
- * Hand3DScene - 真实 3D 手势渲染场景
+ * createAnatomicalSegmentGeometry
+ * 构造拟真人手有机平滑指节几何体 (Tapered Capsule)
+ * - 底部：半球形球冠 (直径与上一关节重合)
+ * - 中部：微收腰、剖面微扁圆的人体工学指节柱
+ * - 顶部：平滑球冠 (直径与下一关节重合)
+ * 连续指节之间球心同心重合，手指在任何弯曲角度均无缝隙、无穿模棱角
+ */
+function createAnatomicalSegmentGeometry(radialSegments = 16, heightSegments = 8) {
+  const geom = new THREE.BufferGeometry();
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  const rings = heightSegments + 1;
+  for (let r = 0; r <= rings; r++) {
+    const v = r / rings; // 0 (底部关节) 到 1 (顶部关节)
+
+    let radiusRatio = 1.0;
+    if (v < 0.2) {
+      // 底部球冠
+      const angle = (v / 0.2) * (Math.PI * 0.5);
+      radiusRatio = Math.sin(angle);
+    } else if (v > 0.8) {
+      // 顶部球冠
+      const angle = ((1 - v) / 0.2) * (Math.PI * 0.5);
+      radiusRatio = Math.sin(angle) * 0.88;
+    } else {
+      // 中间段：近端到远端微收腰自然渐变
+      const midT = (v - 0.2) / 0.6;
+      radiusRatio = (1.0 - 0.12 * midT) * (1.0 - 0.03 * Math.sin(midT * Math.PI));
+    }
+
+    const y = v; // 轴向高度 0 到 1
+
+    for (let s = 0; s <= radialSegments; s++) {
+      const u = s / radialSegments;
+      const theta = u * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+
+      // 指腹方向略微扁平 (侧扁比 0.94，呈现自然人手椭圆横截面)
+      const x = cosT * radiusRatio;
+      const z = sinT * radiusRatio * 0.94;
+
+      positions.push(x, y, z);
+
+      const nx = cosT;
+      const ny = v < 0.2 ? -Math.cos((v / 0.2) * Math.PI * 0.5) : v > 0.8 ? Math.cos(((1 - v) / 0.2) * Math.PI * 0.5) : 0;
+      const nz = sinT;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      normals.push(nx / len, ny / len, nz / len);
+
+      uvs.push(u, v);
+    }
+  }
+
+  const ringVerts = radialSegments + 1;
+  for (let r = 0; r < rings; r++) {
+    for (let s = 0; s < radialSegments; s++) {
+      const a = r * ringVerts + s;
+      const b = (r + 1) * ringVerts + s;
+      const c = (r + 1) * ringVerts + (s + 1);
+      const d = r * ringVerts + (s + 1);
+
+      indices.push(a, b, d);
+      indices.push(d, b, c);
+    }
+  }
+
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
+ * createCurvedFingernailGeometry
+ * 构造拟真人手指甲盖曲面几何体 (Curved Shell)
+ * 具有横向 C 弧曲率与纵向微弧度，贴合指尖背部
+ */
+function createCurvedFingernailGeometry() {
+  const geom = new THREE.BufferGeometry();
+  const widthSegments = 8;
+  const lengthSegments = 6;
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+
+  for (let l = 0; l <= lengthSegments; l++) {
+    const v = l / lengthSegments;
+    const y = v; // 甲根到甲尖
+    const archY = Math.sin(v * Math.PI) * 0.08;
+
+    for (let w = 0; w <= widthSegments; w++) {
+      const u = w / widthSegments;
+      const uNorm = (u - 0.5) * 2; // -1 到 +1
+      const archX = (1 - uNorm * uNorm) * 0.26;
+
+      const x = uNorm * 0.48;
+      const z = archX + archY;
+
+      positions.push(x, y, z);
+      normals.push(0, 0, 1);
+      uvs.push(u, v);
+    }
+  }
+
+  const rowVerts = widthSegments + 1;
+  for (let l = 0; l < lengthSegments; l++) {
+    for (let w = 0; w < widthSegments; w++) {
+      const a = l * rowVerts + w;
+      const b = (l + 1) * rowVerts + w;
+      const c = (l + 1) * rowVerts + (w + 1);
+      const d = l * rowVerts + (w + 1);
+
+      indices.push(a, b, d);
+      indices.push(d, b, c);
+    }
+  }
+
+  geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+  return geom;
+}
+
+/**
+ * createAnatomicalPalmGeometry
+ * 构造具有肌肉丰满度与掌弓曲率的有机 3D 手掌网格 (5行 x 7列 细分曲面)
+ * 正反双层 (手背 + 手心) + 侧边缘无缝封闭缝合
+ */
+function createAnatomicalPalmGeometry() {
+  const geom = new THREE.BufferGeometry();
+  const rows = 5;
+  const cols = 7;
+  const numSurface = rows * cols;
+  const totalVerts = numSurface * 2;
+
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  const uvs = new Float32Array(totalVerts * 2);
+  const indices = [];
+
+  // 1. 手背上表面
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const i0 = r * cols + c;
+      const i1 = r * cols + (c + 1);
+      const i2 = (r + 1) * cols + c;
+      const i3 = (r + 1) * cols + (c + 1);
+      indices.push(i0, i1, i2);
+      indices.push(i1, i3, i2);
+    }
+  }
+
+  // 2. 手心下表面 (反向绕序)
+  const off = numSurface;
+  for (let r = 0; r < rows - 1; r++) {
+    for (let c = 0; c < cols - 1; c++) {
+      const i0 = off + r * cols + c;
+      const i1 = off + r * cols + (c + 1);
+      const i2 = off + (r + 1) * cols + c;
+      const i3 = off + (r + 1) * cols + (c + 1);
+      indices.push(i0, i2, i1);
+      indices.push(i1, i2, i3);
+    }
+  }
+
+  // 3. 侧面厚度缝合
+  // (a) 底部 (手腕) r = 0
+  for (let c = 0; c < cols - 1; c++) {
+    const top0 = c;
+    const top1 = c + 1;
+    const bot0 = off + c;
+    const bot1 = off + c + 1;
+    indices.push(top0, bot0, top1);
+    indices.push(top1, bot0, bot1);
+  }
+  // (b) 顶部 (指根/指蹼) r = rows - 1
+  const rTop = rows - 1;
+  for (let c = 0; c < cols - 1; c++) {
+    const top0 = rTop * cols + c;
+    const top1 = rTop * cols + (c + 1);
+    const bot0 = off + rTop * cols + c;
+    const bot1 = off + rTop * cols + (c + 1);
+    indices.push(top0, top1, bot0);
+    indices.push(top1, bot1, bot0);
+  }
+  // (c) 拇指外侧边 c = 0
+  for (let r = 0; r < rows - 1; r++) {
+    const top0 = r * cols;
+    const top1 = (r + 1) * cols;
+    const bot0 = off + r * cols;
+    const bot1 = off + (r + 1) * cols;
+    indices.push(top0, top1, bot0);
+    indices.push(top1, bot1, bot0);
+  }
+  // (d) 小指外侧边 c = cols - 1
+  for (let r = 0; r < rows - 1; r++) {
+    const top0 = r * cols + (cols - 1);
+    const top1 = (r + 1) * cols + (cols - 1);
+    const bot0 = off + r * cols + (cols - 1);
+    const bot1 = off + (r + 1) * cols + (cols - 1);
+    indices.push(top0, bot0, top1);
+    indices.push(top1, bot0, bot1);
+  }
+
+  geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geom.setIndex(indices);
+  geom.computeVertexNormals();
+
+  return { geom, rows, cols };
+}
+
+/**
+ * Hand3DScene - 真实 3D 手势渲染场景 (超逼真有机人体解剖学手模)
  * 
- * 功能特性：
- * 1. 3D 拟真解剖学手模 (Anatomical Skin)：1:1 动态贴合 MediaPipe 21 点，自然指节、指腹与手掌厚度，PBR 次表面肤色光泽
- * 2. 开源 WebXR SkinnedMesh 骨骼模型 (Open-source GLTF)：加载开源 standard generic hand 模型并实时骨骼姿态驱动
- * 3. 赛博机甲 3D 手模 (Cyberpunk Mechanical)：钛金拉丝金属 + 荧光关节霓虹线
- * 4. 零 GC 内存优化：预分配网格与变换矩阵，60FPS 极速丝滑渲染
+ * 核心升级：
+ * 1. 拟真解剖学肌肉与掌弓网格 (Anatomical Palm)：多段细分四边形带曲面，包含大鱼际肌、小鱼际肌、掌心凹陷与指蹼自然过渡
+ * 2. 有机无缝平滑指节 (Seamless Contoured Capsules)：微收腰椭圆剖面 + 连续同心球面过渡，各关节弯曲零破绽
+ * 3. 3D 立体曲面指甲盖 (3D Curved Fingernails)：自然 C 弧甲盖，高光透亮角蛋白微光泽
+ * 4. PBR 次表面皮肤反射系统 (PBR Subsurface Skin)：MeshPhysicalMaterial 次表面散射色 (Sheen) + 柔和清漆油脂光泽
+ * 5. 动态防抖自适应滤波 (Adaptive EMA)：静止画线超强防抖，挥手动作零延迟跟手
  */
 export class Hand3DScene {
   constructor(canvas) {
@@ -57,16 +281,15 @@ export class Hand3DScene {
     this.scene = new THREE.Scene();
 
     // 采用与屏幕像素 1:1 精确对应的正交投影相机
-    // (0, 0) 在左上角，(width, height) 在右下角，完全与 Canvas 屏幕坐标重合
     this.camera = new THREE.OrthographicCamera(
       0,
       this.width,
       0,
       this.height,
-      -1200,
-      1200
+      -2000,
+      2000
     );
-    this.camera.position.set(0, 0, 500);
+    this.camera.position.set(0, 0, 1000);
     this.camera.lookAt(0, 0, 0);
 
     // WebGLRenderer 透明背景
@@ -80,7 +303,7 @@ export class Hand3DScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = false;
-    this.renderer.setClearColor(0x000000, 0); // 确保 100% 透明，完全透出底层白色画布与纸张投影
+    this.renderer.setClearColor(0x000000, 0); // 100% 透明，透出底层白色画布
 
     // 设置拟真人体皮肤照明光影系统
     this._setupLighting();
@@ -100,92 +323,124 @@ export class Hand3DScene {
 
   _setupLighting() {
     // 基础环境漫反射光
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
     this.scene.add(ambientLight);
 
     // 主方向光（来自前方斜上方，模拟自然日光照在手背）
-    const mainDirLight = new THREE.DirectionalLight(0xfff7ed, 1.4);
-    mainDirLight.position.set(200, -300, 400);
+    const mainDirLight = new THREE.DirectionalLight(0xfffaed, 1.3);
+    mainDirLight.position.set(200, -350, 600);
     this.scene.add(mainDirLight);
 
-    // 轮廓补光（来自侧下方，勾勒手缘立体感）
-    const rimLight = new THREE.DirectionalLight(0x93c5fd, 0.7);
-    rimLight.position.set(-200, 300, -200);
-    this.scene.add(rimLight);
+    // 次表面透光轮廓补光（背光斜下方暖红光，模拟人手软组织透光次表面边缘）
+    const sssRimLight = new THREE.DirectionalLight(0xffa278, 0.85);
+    sssRimLight.position.set(-200, 350, -400);
+    this.scene.add(sssRimLight);
+
+    // 天空冷暖侧补光（勾勒手指侧面高光轮廓）
+    const sideLight = new THREE.DirectionalLight(0xc7d2fe, 0.5);
+    sideLight.position.set(-350, -200, 400);
+    this.scene.add(sideLight);
 
     // 半球光（天空暖光与地面冷反光）
-    const hemiLight = new THREE.HemisphereLight(0xffedd5, 0x1e293b, 0.6);
+    const hemiLight = new THREE.HemisphereLight(0xffedd5, 0x1e293b, 0.55);
     this.scene.add(hemiLight);
   }
 
   _initMaterials() {
-    // 1. 拟真皮肤材质 (Natural Realistic Skin)
+    // 1. 拟真人体 PBR 物理皮肤材质 (Realistic Subsurface Skin)
     this.materials.skin = {
-      palm: new THREE.MeshStandardMaterial({
-        color: 0xf5caa6,
-        roughness: 0.55,
-        metalness: 0.05,
-        flatShading: false,
+      palm: new THREE.MeshPhysicalMaterial({
+        color: 0xf5cca8,
+        roughness: 0.52,
+        metalness: 0.0,
+        clearcoat: 0.14,
+        clearcoatRoughness: 0.38,
+        sheen: 0.45,
+        sheenColor: new THREE.Color(0xffa888),
         side: THREE.DoubleSide,
       }),
-      finger: new THREE.MeshStandardMaterial({
+      finger: new THREE.MeshPhysicalMaterial({
         color: 0xefbe9b,
-        roughness: 0.5,
-        metalness: 0.05,
-        flatShading: false,
+        roughness: 0.48,
+        metalness: 0.0,
+        clearcoat: 0.16,
+        clearcoatRoughness: 0.35,
+        sheen: 0.5,
+        sheenColor: new THREE.Color(0xff9c80),
         side: THREE.DoubleSide,
       }),
-      joint: new THREE.MeshStandardMaterial({
-        color: 0xeaa988, // 关节处微红，模拟真实软骨与血液微循环
-        roughness: 0.6,
-        metalness: 0.04,
+      joint: new THREE.MeshPhysicalMaterial({
+        color: 0xe89e82, // 关节软骨与微血管健康透红
+        roughness: 0.52,
+        metalness: 0.0,
+        clearcoat: 0.12,
+        sheen: 0.55,
+        sheenColor: new THREE.Color(0xff7562),
         side: THREE.DoubleSide,
       }),
-      nail: new THREE.MeshStandardMaterial({
-        color: 0xffe4db,
-        roughness: 0.25,
-        metalness: 0.1, // 指甲盖光泽感
+      nail: new THREE.MeshPhysicalMaterial({
+        color: 0xffeae3, // 指甲盖自然半透角蛋白象牙粉白
+        roughness: 0.16,
+        metalness: 0.02,
+        clearcoat: 0.92,
+        clearcoatRoughness: 0.1,
+        reflectivity: 0.65,
+        side: THREE.DoubleSide,
+      }),
+      wrist: new THREE.MeshPhysicalMaterial({
+        color: 0xf2c6a2,
+        roughness: 0.54,
+        metalness: 0.0,
+        clearcoat: 0.1,
+        sheen: 0.4,
+        sheenColor: new THREE.Color(0xffa280),
         side: THREE.DoubleSide,
       }),
     };
 
-    // 2. 赛博机甲材质 (Cyberpunk Mechanical)
+    // 2. 赛博机甲材质 (Cyberpunk Titanium Mecha)
     this.materials.cyber = {
       palm: new THREE.MeshStandardMaterial({
-        color: 0x1e293b,
-        roughness: 0.2,
-        metalness: 0.85,
+        color: 0x18202c,
+        roughness: 0.22,
+        metalness: 0.88,
         side: THREE.DoubleSide,
       }),
       finger: new THREE.MeshStandardMaterial({
-        color: 0x334155,
+        color: 0x242e3d,
         roughness: 0.25,
-        metalness: 0.9,
+        metalness: 0.92,
         side: THREE.DoubleSide,
       }),
       joint: new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
         emissive: 0x0284c7,
-        emissiveIntensity: 0.8,
-        roughness: 0.2,
-        metalness: 0.5,
+        emissiveIntensity: 0.85,
+        roughness: 0.18,
+        metalness: 0.55,
         side: THREE.DoubleSide,
       }),
       nail: new THREE.MeshStandardMaterial({
         color: 0x06b6d4,
         emissive: 0x0891b2,
-        emissiveIntensity: 1.0,
-        roughness: 0.1,
-        metalness: 0.3,
+        emissiveIntensity: 1.1,
+        roughness: 0.12,
+        metalness: 0.35,
+        side: THREE.DoubleSide,
+      }),
+      wrist: new THREE.MeshStandardMaterial({
+        color: 0x0f172a,
+        roughness: 0.2,
+        metalness: 0.9,
         side: THREE.DoubleSide,
       }),
     };
 
-    // 3. 悬浮柔和阴影材质
+    // 3. 悬浮柔和暗影材质
     this.materials.shadow = new THREE.MeshBasicMaterial({
       color: 0x000000,
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.15,
       depthWrite: false,
     });
 
@@ -207,13 +462,13 @@ export class Hand3DScene {
       depthWrite: false,
     });
 
-    // 预创建通用几何体（避免动态分配）
-    this.sharedGeometries.sphere = new THREE.SphereGeometry(1, 16, 12);
-    this.sharedGeometries.cylinder = new THREE.CylinderGeometry(1, 1, 1, 14, 1, false);
-    this.sharedGeometries.tipSphere = new THREE.SphereGeometry(1, 16, 12);
-    this.sharedGeometries.nail = new THREE.CylinderGeometry(0.8, 0.9, 0.15, 12);
-    this.sharedGeometries.shadow = new THREE.CircleGeometry(1, 24);
-    this.sharedGeometries.ring = new THREE.RingGeometry(0.7, 1.0, 24);
+    // 预创建高精通用几何体池（零 GC）
+    this.sharedGeometries.segment = createAnatomicalSegmentGeometry(16, 8);
+    this.sharedGeometries.knuckle = new THREE.SphereGeometry(1, 16, 12);
+    this.sharedGeometries.nail = createCurvedFingernailGeometry();
+    this.sharedGeometries.wristCuff = new THREE.CylinderGeometry(1, 1.15, 1, 16, 2, false);
+    this.sharedGeometries.shadow = new THREE.CircleGeometry(1, 28);
+    this.sharedGeometries.ring = new THREE.RingGeometry(0.7, 1.0, 28);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -224,59 +479,64 @@ export class Hand3DScene {
     const group = new THREE.Group();
     group.visible = false;
 
-    // 手指骨骼定义：5 根手指，每根手指的关键点序号
+    // 手指骨骼定义：5 根手指
     const fingerDefs = [
-      { name: 'thumb', joints: [1, 2, 3, 4], baseRadius: 15, tipRadius: 10 },
-      { name: 'index', joints: [5, 6, 7, 8], baseRadius: 14, tipRadius: 9 },
-      { name: 'middle', joints: [9, 10, 11, 12], baseRadius: 14.5, tipRadius: 9.5 },
-      { name: 'ring', joints: [13, 14, 15, 16], baseRadius: 13.5, tipRadius: 8.5 },
-      { name: 'pinky', joints: [17, 18, 19, 20], baseRadius: 12, tipRadius: 7.5 },
+      { name: 'thumb', joints: [1, 2, 3, 4], baseR: 15, tipR: 11, nailScale: 1.1 },
+      { name: 'index', joints: [5, 6, 7, 8], baseR: 14, tipR: 9.2, nailScale: 1.0 },
+      { name: 'middle', joints: [9, 10, 11, 12], baseR: 14.5, tipR: 9.6, nailScale: 1.05 },
+      { name: 'ring', joints: [13, 14, 15, 16], baseR: 13.5, tipR: 8.8, nailScale: 0.95 },
+      { name: 'pinky', joints: [17, 18, 19, 20], baseR: 12, tipR: 7.8, nailScale: 0.85 },
     ];
 
     const currentMat = this.materials[this.currentTheme] || this.materials.skin;
 
-    // 1. 手掌几何体容器
-    const palmMesh = this._createPalmMesh(currentMat.palm);
-    group.add(palmMesh);
+    // 1. 拟真解剖学 3D 手掌
+    const palmMeshInfo = this._createPalmMesh(currentMat.palm);
+    group.add(palmMeshInfo.mesh);
 
-    // 2. 五指各指节与关节节点
+    // 2. 五指平滑指节、掌指关节 (MCP) 与 3D 指甲盖
     const fingers = [];
     fingerDefs.forEach((def) => {
       const fingerObj = {
         name: def.name,
         joints: def.joints,
+        baseR: def.baseR,
+        tipR: def.tipR,
+        nailScale: def.nailScale,
         segments: [],
         knuckles: [],
         nailMesh: null,
       };
 
-      // 关节球 (Knuckles)
+      // 掌指关节微隆起 (Knuckle Condyle)
       def.joints.forEach((jointIdx, i) => {
-        const kMesh = new THREE.Mesh(this.sharedGeometries.sphere, currentMat.joint);
+        const kMesh = new THREE.Mesh(this.sharedGeometries.knuckle, currentMat.joint);
         kMesh.visible = true;
         group.add(kMesh);
-        fingerObj.knuckles.push({ index: jointIdx, mesh: kMesh });
+        fingerObj.knuckles.push({ index: jointIdx, mesh: kMesh, isTip: i === def.joints.length - 1 });
       });
 
-      // 指节胶囊连接柱 (Bone segments)
+      // 有机平滑指节连接体 (Anatomical Bone Segments)
       for (let s = 0; s < def.joints.length - 1; s++) {
         const fromIdx = def.joints[s];
         const toIdx = def.joints[s + 1];
-        const segMesh = new THREE.Mesh(this.sharedGeometries.cylinder, currentMat.finger);
+        const segMesh = new THREE.Mesh(this.sharedGeometries.segment, currentMat.finger);
+        segMesh.frustumCulled = false;
         group.add(segMesh);
         fingerObj.segments.push({ from: fromIdx, to: toIdx, mesh: segMesh, stage: s });
       }
 
-      // 指甲盖 (仅指尖关节拥有)
+      // 3D 曲面立体指甲盖 (位于末节指背)
       const nailMesh = new THREE.Mesh(this.sharedGeometries.nail, currentMat.nail);
+      nailMesh.frustumCulled = false;
       group.add(nailMesh);
       fingerObj.nailMesh = nailMesh;
 
       fingers.push(fingerObj);
     });
 
-    // 3. 手腕基座球 (Wrist Joint)
-    const wristMesh = new THREE.Mesh(this.sharedGeometries.sphere, currentMat.joint);
+    // 3. 手腕基座过渡袖套 (Wrist Cuff)
+    const wristMesh = new THREE.Mesh(this.sharedGeometries.wristCuff, currentMat.wrist || currentMat.joint);
     group.add(wristMesh);
 
     // 4. 开源 GLTF 骨骼模型包装挂载点
@@ -284,7 +544,7 @@ export class Hand3DScene {
     gltfWrapper.visible = false;
     group.add(gltfWrapper);
 
-    // 5. 悬浮物理投影网格 (Soft Drop Shadow)
+    // 5. 接触投影网格 (Drop Shadow)
     const shadowMesh = new THREE.Mesh(this.sharedGeometries.shadow, this.materials.shadow);
     shadowMesh.visible = false;
     group.add(shadowMesh);
@@ -302,7 +562,8 @@ export class Hand3DScene {
     return {
       group,
       handedness,
-      palmMesh,
+      palmMesh: palmMeshInfo.mesh,
+      palmMeshInfo,
       fingers,
       wristMesh,
       shadowMesh,
@@ -315,50 +576,12 @@ export class Hand3DScene {
     };
   }
 
-  // 构造真实厚度手掌网格
+  // 构造有机手掌网格
   _createPalmMesh(material) {
-    const geom = new THREE.BufferGeometry();
-    // 掌心由 6 个外围关键点 (0, 1, 5, 9, 13, 17) 及中心构成，正反双层共 14 个顶点
-    const vertexCount = 14;
-    const positions = new Float32Array(vertexCount * 3);
-    const normals = new Float32Array(vertexCount * 3);
-    const uvs = new Float32Array(vertexCount * 2);
-
-    // 索引缓冲: 手背扇形(0~6) + 手心扇形(7~13) + 侧边厚度缝合
-    const indices = [
-      // 正面 (手背)
-      6, 0, 1,
-      6, 1, 2,
-      6, 2, 3,
-      6, 3, 4,
-      6, 4, 5,
-      6, 5, 0,
-
-      // 反面 (手心，法线反向)
-      13, 8, 7,
-      13, 9, 8,
-      13, 10, 9,
-      13, 11, 10,
-      13, 12, 11,
-      13, 7, 12,
-
-      // 侧边厚度缝合
-      0, 1, 8,   0, 8, 7,
-      1, 2, 9,   1, 9, 8,
-      2, 3, 10,  2, 10, 9,
-      3, 4, 11,  3, 11, 10,
-      4, 5, 12,  4, 12, 11,
-      5, 0, 7,   5, 7, 12,
-    ];
-
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geom.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-    geom.setIndex(indices);
-
+    const { geom, rows, cols } = createAnatomicalPalmGeometry();
     const mesh = new THREE.Mesh(geom, material);
     mesh.frustumCulled = false;
-    return mesh;
+    return { mesh, rows, cols };
   }
 
   // ═══════════════════════════════════════════════════════
@@ -395,15 +618,17 @@ export class Hand3DScene {
     if (!hand) return;
 
     const root = gltf.scene.clone();
-    // 赋予自然皮肤材质质感
     root.traverse((node) => {
       if (node.isMesh) {
         node.castShadow = false;
         node.receiveShadow = false;
-        node.material = new THREE.MeshStandardMaterial({
-          color: 0xf5caa6,
+        node.material = new THREE.MeshPhysicalMaterial({
+          color: 0xf5cca8,
           roughness: 0.5,
-          metalness: 0.05,
+          metalness: 0.0,
+          clearcoat: 0.15,
+          sheen: 0.45,
+          sheenColor: new THREE.Color(0xffa888),
         });
       }
     });
@@ -411,7 +636,6 @@ export class Hand3DScene {
     hand.gltfModel = root;
     hand.gltfWrapper.add(root);
 
-    // 缓存骨骼节点引用
     const jointNames = [
       'wrist',
       'thumb-metacarpal', 'thumb-phalanx-proximal', 'thumb-phalanx-distal', 'thumb-tip',
@@ -443,7 +667,6 @@ export class Hand3DScene {
       return;
     }
 
-    // 记录本帧活跃的手
     const activeSides = { Right: false, Left: false };
 
     try {
@@ -456,30 +679,34 @@ export class Hand3DScene {
         const hand = this.hands[side];
         hand.group.visible = true;
 
-        // 将 MediaPipe 归一化点映射到屏幕世界空间 (X 镜像翻转，Z 放大深度)
+        // 归一化点映射到屏幕世界空间
         const rawPts3D = this._mapLandmarksToWorld(landmarks);
 
-        // 运动动力学指数平滑滤波 (EMA Smoothing)，彻底消除摄像头帧间噪点微抖动
+        // 自适应动态指数滤波 (Adaptive EMA)
+        // 缓慢微动时使用高阻尼消除噪点微抖，快速滑动时自适应提高响应率
         if (!hand.smoothedPts || hand.smoothedPts.length !== rawPts3D.length) {
           hand.smoothedPts = rawPts3D.map((p) => ({ ...p }));
         } else {
-          const alpha = 0.46; // 兼具极致防抖与零感知延迟
           for (let i = 0; i < rawPts3D.length; i++) {
-            hand.smoothedPts[i].x += (rawPts3D[i].x - hand.smoothedPts[i].x) * alpha;
-            hand.smoothedPts[i].y += (rawPts3D[i].y - hand.smoothedPts[i].y) * alpha;
-            hand.smoothedPts[i].z += (rawPts3D[i].z - hand.smoothedPts[i].z) * alpha;
+            const dx = rawPts3D[i].x - hand.smoothedPts[i].x;
+            const dy = rawPts3D[i].y - hand.smoothedPts[i].y;
+            const dz = rawPts3D[i].z - hand.smoothedPts[i].z;
+            const moveDist = Math.hypot(dx, dy, dz);
+
+            // 速度自适应平滑系数
+            const alpha = Math.min(0.75, Math.max(0.32, moveDist * 0.05));
+            hand.smoothedPts[i].x += dx * alpha;
+            hand.smoothedPts[i].y += dy * alpha;
+            hand.smoothedPts[i].z += dz * alpha;
           }
         }
         const pts3D = hand.smoothedPts;
 
-        // 根据当前风格驱动模型
         if (this.currentTheme === 'model' && hand.gltfModel && this.modelLoadState[side] === 'loaded') {
-          // 模式：开源 GLTF 骨骼模型
           this._driveGltfHand(hand, pts3D, landmarks);
           hand.gltfWrapper.visible = true;
           this._setAnatomicalVisible(hand, false);
         } else {
-          // 模式：3D 拟真解剖学模型 (Skin / Cyber)
           hand.gltfWrapper.visible = false;
           this._setAnatomicalVisible(hand, true);
           this._driveAnatomicalHand(hand, pts3D, handData);
@@ -495,7 +722,6 @@ export class Hand3DScene {
         this.hands.Left.smoothedPts = null;
       }
 
-      // 渲染 Three.js 场景
       this.renderer.render(this.scene, this.camera);
     } catch (renderErr) {
       console.warn('3D 手势渲染保护:', renderErr);
@@ -517,22 +743,18 @@ export class Hand3DScene {
     });
   }
 
-  // 坐标空间转换：归一化坐标 -> 屏幕像素 3D 空间
   _mapLandmarksToWorld(landmarks) {
     const w = this.width;
     const h = this.height;
-    // 手掌基准尺度（用于深度 Z 的合理比例扩展）
     const dx = (landmarks[5].x - landmarks[17].x) * w;
     const dy = (landmarks[5].y - landmarks[17].y) * h;
     const palmScale = Math.hypot(dx, dy) || 120;
 
-    return landmarks.map((pt) => {
-      return {
-        x: (1 - pt.x) * w,   // 镜像匹配摄像头
-        y: pt.y * h,         // 屏幕 Y
-        z: -pt.z * palmScale * 2.2, // 深度 Z (靠近镜头为正，远离为负)
-      };
-    });
+    return landmarks.map((pt) => ({
+      x: (1 - pt.x) * w,
+      y: pt.y * h,
+      z: -pt.z * palmScale * 2.2,
+    }));
   }
 
   // ═══════════════════════════════════════════════════════
@@ -541,36 +763,62 @@ export class Hand3DScene {
 
   _driveAnatomicalHand(hand, pts, handData = null) {
     const palmBaseScale = Math.hypot(pts[5].x - pts[17].x, pts[5].y - pts[17].y) || 100;
-    const thickness = palmBaseScale * 0.16; // 拟真手掌厚度
+    const thickness = palmBaseScale * 0.17;
 
-    // 1. 更新手腕基座
-    const wrist = pts[0];
-    hand.wristMesh.position.set(wrist.x, wrist.y, wrist.z);
-    const wristRadius = palmBaseScale * 0.14;
-    hand.wristMesh.scale.set(wristRadius, wristRadius, wristRadius);
+    // 1. 计算 3D 手掌法向量 (掌心朝向 / 手背朝向)
+    const v1 = new THREE.Vector3(pts[5].x - pts[0].x, pts[5].y - pts[0].y, pts[5].z - pts[0].z);
+    const v2 = new THREE.Vector3(pts[17].x - pts[0].x, pts[17].y - pts[0].y, pts[17].z - pts[0].z);
+    const palmNormal = new THREE.Vector3().crossVectors(v1, v2).normalize();
 
-    // 2. 更新手掌网格顶点 (手背与手心双层，包裹掌骨)
-    this._updatePalmGeometry(hand.palmMesh, pts, thickness);
+    // 根据左右手校准手背朝向方向
+    const isRightHand = hand.handedness.toLowerCase() === 'right';
+    const dorsalNormal = isRightHand ? palmNormal.clone().negate() : palmNormal.clone();
 
-    // 3. 更新五指：关节球 (Knuckles) + 指节胶囊柱 (Bone Segments) + 指甲盖 (Nails)
+    // 2. 更新解剖学有机手掌网格 (含大鱼际肌、小鱼际肌与指蹼连贯曲面)
+    this._updatePalmGeometry(hand.palmMesh, pts, thickness, dorsalNormal, hand.handedness);
+
+    // 3. 更新手腕基座袖套 (Wrist Cuff)
+    const wristPt = pts[0];
+    const midMCP = new THREE.Vector3(
+      (pts[5].x + pts[17].x) * 0.5,
+      (pts[5].y + pts[17].y) * 0.5,
+      (pts[5].z + pts[17].z) * 0.5
+    );
+    const wristDir = new THREE.Vector3(
+      midMCP.x - wristPt.x,
+      midMCP.y - wristPt.y,
+      midMCP.z - wristPt.z
+    ).normalize();
+    const up = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion().setFromUnitVectors(up, wristDir);
+
+    const wristRadius = palmBaseScale * 0.15;
+    const wristLength = palmBaseScale * 0.22;
+    // 腕部略向小臂延伸
+    const wristPos = new THREE.Vector3(
+      wristPt.x - wristDir.x * wristLength * 0.4,
+      wristPt.y - wristDir.y * wristLength * 0.4,
+      wristPt.z - wristDir.z * wristLength * 0.4
+    );
+    hand.wristMesh.position.copy(wristPos);
+    hand.wristMesh.quaternion.copy(quat);
+    hand.wristMesh.scale.set(wristRadius, wristLength, wristRadius * 0.85);
+
+    // 4. 更新五指：有机无缝指节 + 掌指关节 + 3D 立体曲面指甲盖
     const p1 = new THREE.Vector3();
     const p2 = new THREE.Vector3();
-    const dir = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
-    const quat = new THREE.Quaternion();
+    const segDir = new THREE.Vector3();
 
     hand.fingers.forEach((finger) => {
-      // (a) 更新关节球
+      // (a) 更新掌指关节微隆起 (Knuckles)
       finger.knuckles.forEach((k) => {
         const pt = pts[k.index];
         k.mesh.position.set(pt.x, pt.y, pt.z);
-        // 指尖稍小，指根较粗
-        const isTip = k.index % 4 === 0;
-        const radius = isTip ? palmBaseScale * 0.08 : palmBaseScale * 0.095;
+        const radius = k.isTip ? palmBaseScale * 0.082 : palmBaseScale * 0.098;
         k.mesh.scale.set(radius, radius, radius);
       });
 
-      // (b) 更新各指节圆柱 (连接两关节点，自动计算朝向与长度)
+      // (b) 更新平滑指节 (连接两关节点，同心球形顶底零缝隙贴合)
       finger.segments.forEach((seg) => {
         const fromPt = pts[seg.from];
         const toPt = pts[seg.to];
@@ -580,20 +828,19 @@ export class Hand3DScene {
         const length = p1.distanceTo(p2);
         if (length < 0.001) return;
 
-        // 圆柱位置位于两点中点
-        seg.mesh.position.lerpVectors(p1, p2, 0.5);
+        // 原点位于 fromPt
+        seg.mesh.position.copy(p1);
 
-        // 旋转对齐：Three.js 默认圆柱沿 Y 轴，将 (0,1,0) 旋转对齐到 dir 向量
-        dir.subVectors(p2, p1).normalize();
-        quat.setFromUnitVectors(up, dir);
+        segDir.subVectors(p2, p1).normalize();
+        quat.setFromUnitVectors(up, segDir);
         seg.mesh.quaternion.copy(quat);
 
-        // 粗细渐变：近端较粗，远端较细
-        const r = palmBaseScale * (0.09 - seg.stage * 0.012);
+        // 指节粗细近端稍粗，远端稍细
+        const r = palmBaseScale * (0.096 - seg.stage * 0.012);
         seg.mesh.scale.set(r, length, r);
       });
 
-      // (c) 更新指甲盖 (位于指尖，贴在指背方向)
+      // (c) 更新 3D 立体曲面指甲盖 (位于末节指背)
       if (finger.nailMesh) {
         const tipIdx = finger.joints[finger.joints.length - 1];
         const dipIdx = finger.joints[finger.joints.length - 2];
@@ -603,21 +850,27 @@ export class Hand3DScene {
         p1.set(dipPt.x, dipPt.y, dipPt.z);
         p2.set(tipPt.x, tipPt.y, tipPt.z);
 
-        dir.subVectors(p2, p1).normalize();
-        quat.setFromUnitVectors(up, dir);
+        segDir.subVectors(p2, p1).normalize();
+        const segLen = p1.distanceTo(p2);
 
-        // 贴合在指背浅表面
-        const nailPos = p2.clone().addScaledVector(dir, -2);
-        nailPos.z += thickness * 0.45;
+        quat.setFromUnitVectors(up, segDir);
+        finger.nailMesh.quaternion.copy(quat);
+
+        // 顺着指骨背向法线自然贴合在甲床表面
+        const nailWidth = palmBaseScale * 0.082 * finger.nailScale;
+        const nailLength = Math.max(12, segLen * 0.42);
+
+        // 位置位于指尖稍靠后
+        const nailPos = p2.clone().addScaledVector(segDir, -nailLength * 0.78);
+        // 沿手背法向贴合指面
+        nailPos.addScaledVector(dorsalNormal, nailWidth * 0.72);
 
         finger.nailMesh.position.copy(nailPos);
-        finger.nailMesh.quaternion.copy(quat);
-        const nailR = palmBaseScale * 0.07;
-        finger.nailMesh.scale.set(nailR, 1, nailR);
+        finger.nailMesh.scale.set(nailWidth, nailLength, nailWidth * 0.95);
       }
     });
 
-    // 4. 更新柔和悬浮接触暗影 (根据手掌中心与深度自适应缩放与透明度)
+    // 5. 悬浮接触柔和暗影
     if (hand.shadowMesh) {
       const pWrist = pts[0];
       const pMiddle = pts[9];
@@ -625,16 +878,14 @@ export class Hand3DScene {
       const palmCenterY = (pWrist.y + pMiddle.y) * 0.5;
       const palmCenterZ = (pWrist.z + pMiddle.z) * 0.5;
 
-      // 阴影固定在画布浅层基底
-      hand.shadowMesh.position.set(palmCenterX, palmCenterY + palmBaseScale * 0.1, -100);
-      // 深度越大，阴影扩散越大、颜色越淡
+      hand.shadowMesh.position.set(palmCenterX, palmCenterY + palmBaseScale * 0.12, -100);
       const depthFactor = Math.max(0.6, Math.min(2.0, 1.0 + (palmCenterZ / palmBaseScale) * 0.4));
-      const shadowRadius = palmBaseScale * 0.85 * depthFactor;
-      hand.shadowMesh.scale.set(shadowRadius, shadowRadius * 0.75, 1);
-      hand.shadowMesh.material.opacity = Math.max(0.06, Math.min(0.24, 0.2 - (palmCenterZ / palmBaseScale) * 0.08));
+      const shadowRadius = palmBaseScale * 0.88 * depthFactor;
+      hand.shadowMesh.scale.set(shadowRadius, shadowRadius * 0.76, 1);
+      hand.shadowMesh.material.opacity = Math.max(0.06, Math.min(0.22, 0.18 - (palmCenterZ / palmBaseScale) * 0.08));
     }
 
-    // 5. 捏合作画微光环 (Pinch Halo Feedback)
+    // 6. 捏合作画高光微光环 (Pinch Halo Feedback)
     if (hand.pinchHaloMesh) {
       const thumbTip = pts[4];
       const indexTip = pts[8];
@@ -645,16 +896,16 @@ export class Hand3DScene {
         hand.pinchHaloMesh.visible = true;
         const midX = (thumbTip.x + indexTip.x) * 0.5;
         const midY = (thumbTip.y + indexTip.y) * 0.5;
-        const midZ = Math.max(thumbTip.z, indexTip.z) + 10;
+        const midZ = Math.max(thumbTip.z, indexTip.z) + 12;
         hand.pinchHaloMesh.position.set(midX, midY, midZ);
-        const ringScale = Math.max(10, palmBaseScale * 0.16 * (1.1 - pinchDist / pinchThreshold));
+        const ringScale = Math.max(10, palmBaseScale * 0.17 * (1.12 - pinchDist / pinchThreshold));
         hand.pinchHaloMesh.scale.set(ringScale, ringScale, 1);
       } else {
         hand.pinchHaloMesh.visible = false;
       }
     }
 
-    // 6. 橡皮擦范围指示环 (Eraser Field Feedback)
+    // 7. 橡皮擦范围指示环 (Eraser Field Feedback)
     if (hand.eraserMesh) {
       const isPalmOpen = handData?.classification?.isOpenPalm && handData?.classification?.isPalm;
       if (isPalmOpen) {
@@ -673,43 +924,121 @@ export class Hand3DScene {
     }
   }
 
-  // 手掌立体网格顶点更新
-  _updatePalmGeometry(mesh, pts, thickness) {
+  // ═══════════════════════════════════════════════════════
+  //  更新解剖学有机 3D 手掌网格 (含大鱼际肌、掌弓与指蹼过渡)
+  // ═══════════════════════════════════════════════════════
+
+  _updatePalmGeometry(mesh, pts, thickness, dorsalNormal, handedness) {
     const pos = mesh.geometry.attributes.position.array;
-    // 关键点：0(腕), 1(拇根), 5(食根), 9(中根), 13(无名根), 17(小根), 掌心(center)
-    const baseIndices = [0, 1, 5, 9, 13, 17];
-    let cx = 0, cy = 0, cz = 0;
-    baseIndices.forEach((idx) => {
-      cx += pts[idx].x;
-      cy += pts[idx].y;
-      cz += pts[idx].z;
-    });
-    cx /= baseIndices.length;
-    cy /= baseIndices.length;
-    cz /= baseIndices.length;
+    const isRightHand = handedness.toLowerCase() === 'right';
 
-    // 手背层 (Z + thickness * 0.5)
-    baseIndices.forEach((idx, i) => {
-      pos[i * 3 + 0] = pts[idx].x;
-      pos[i * 3 + 1] = pts[idx].y;
-      pos[i * 3 + 2] = pts[idx].z + thickness * 0.5;
-    });
-    // 手背中心点
-    pos[6 * 3 + 0] = cx;
-    pos[6 * 3 + 1] = cy;
-    pos[6 * 3 + 2] = cz + thickness * 0.6;
+    // 核心掌骨关键点
+    const pWrist = pts[0];
+    const pThumbCMC = pts[1];
+    const pThumbMCP = pts[2];
+    const pIndexMCP = pts[5];
+    const pMiddleMCP = pts[9];
+    const pRingMCP = pts[13];
+    const pPinkyMCP = pts[17];
 
-    // 手心层 (Z - thickness * 0.5)
-    baseIndices.forEach((idx, i) => {
-      const offset = (7 + i) * 3;
-      pos[offset + 0] = pts[idx].x;
-      pos[offset + 1] = pts[idx].y;
-      pos[offset + 2] = pts[idx].z - thickness * 0.5;
-    });
-    // 手心中心点
-    pos[13 * 3 + 0] = cx;
-    pos[13 * 3 + 1] = cy;
-    pos[13 * 3 + 2] = cz - thickness * 0.6;
+    // 计算手掌关键特征向量
+    const normal = dorsalNormal;
+
+    // 顶端指蹼与掌指关节横行控制点 (7列)：
+    // 从拇指外缘 -> 虎口指蹼 -> 食指根 -> 食中指蹼 -> 中指根 -> 中无名指蹼 -> 小指根
+    const knuckleRow = [
+      pThumbMCP,
+      // 虎口指蹼 (自然柔和曲线过渡)
+      {
+        x: pThumbMCP.x * 0.45 + pIndexMCP.x * 0.55,
+        y: pThumbMCP.y * 0.45 + pIndexMCP.y * 0.55,
+        z: pThumbMCP.z * 0.45 + pIndexMCP.z * 0.55,
+      },
+      pIndexMCP,
+      // 食中指蹼
+      {
+        x: (pIndexMCP.x + pMiddleMCP.x) * 0.5,
+        y: (pIndexMCP.y + pMiddleMCP.y) * 0.5,
+        z: (pIndexMCP.z + pMiddleMCP.z) * 0.5,
+      },
+      pMiddleMCP,
+      // 中无名指蹼
+      {
+        x: (pMiddleMCP.x + pRingMCP.x) * 0.5,
+        y: (pMiddleMCP.y + pRingMCP.y) * 0.5,
+        z: (pMiddleMCP.z + pRingMCP.z) * 0.5,
+      },
+      pPinkyMCP,
+    ];
+
+    // 底部手腕横行控制点 (7列)
+    const wristRadial = {
+      x: pWrist.x + (pIndexMCP.x - pPinkyMCP.x) * 0.28,
+      y: pWrist.y + (pIndexMCP.y - pPinkyMCP.y) * 0.28,
+      z: pWrist.z,
+    };
+    const wristUlnar = {
+      x: pWrist.x - (pIndexMCP.x - pPinkyMCP.x) * 0.25,
+      y: pWrist.y - (pIndexMCP.y - pPinkyMCP.y) * 0.25,
+      z: pWrist.z,
+    };
+
+    const wristRow = [];
+    for (let c = 0; c < 7; c++) {
+      const t = c / 6;
+      wristRow.push({
+        x: wristRadial.x * (1 - t) + wristUlnar.x * t,
+        y: wristRadial.y * (1 - t) + wristUlnar.y * t,
+        z: wristRadial.z * (1 - t) + wristUlnar.z * t,
+      });
+    }
+
+    const rows = 5;
+    const cols = 7;
+    const numSurface = rows * cols;
+
+    for (let r = 0; r < rows; r++) {
+      const v = r / (rows - 1); // 0 (手腕) 到 1 (指根)
+
+      for (let c = 0; c < cols; c++) {
+        const u = c / (cols - 1); // 0 (拇指侧) 到 1 (小指侧)
+        const basePoint = {
+          x: wristRow[c].x * (1 - v) + knuckleRow[c].x * v,
+          y: wristRow[c].y * (1 - v) + knuckleRow[c].y * v,
+          z: wristRow[c].z * (1 - v) + knuckleRow[c].z * v,
+        };
+
+        // 解剖学肌肉丰满度偏移 (Thenar & Hypothenar Eminence)：
+        // 1. 大鱼际肌 (Thenar) 位于拇指侧中下部 (u < 0.35, 0.25 < v < 0.75)
+        const thenarDist = Math.hypot((u - 0.18) * 2.2, (v - 0.48) * 1.8);
+        const thenarBulge = Math.max(0, 1.0 - thenarDist) * 1.45;
+
+        // 2. 小鱼际肌 (Hypothenar) 位于小指侧中下部 (u > 0.65, 0.2 < v < 0.65)
+        const hypoDist = Math.hypot((u - 0.85) * 2.2, (v - 0.42) * 1.8);
+        const hypoBulge = Math.max(0, 1.0 - hypoDist) * 1.15;
+
+        // 3. 掌心自然凹陷 (Palmar Hollow)
+        const hollowDist = Math.hypot((u - 0.5) * 2.5, (v - 0.5) * 2.0);
+        const hollowDepth = Math.max(0, 1.0 - hollowDist) * 0.45;
+
+        // 4. 手背肌腱自然纵向起伏
+        const tendonRidge = Math.sin(u * Math.PI * 4) * 0.12 * Math.sin(v * Math.PI);
+
+        // 手背表面顶点 (Dorsal: 顺着 dorsalNormal 隆起)
+        const dorsalThick = thickness * (0.48 + tendonRidge);
+        const topIdx = (r * cols + c) * 3;
+        pos[topIdx + 0] = basePoint.x + normal.x * dorsalThick;
+        pos[topIdx + 1] = basePoint.y + normal.y * dorsalThick;
+        pos[topIdx + 2] = basePoint.z + normal.z * dorsalThick;
+
+        // 手心表面顶点 (Palmar: 沿 -dorsalNormal 延展，包含丰满大鱼际与掌心凹陷)
+        const palmarThick = thickness * (0.52 + thenarBulge + hypoBulge - hollowDepth);
+        const botIdx = (numSurface + r * cols + c) * 3;
+        pos[botIdx + 0] = basePoint.x - normal.x * palmarThick;
+        pos[botIdx + 1] = basePoint.y - normal.y * palmarThick;
+        pos[botIdx + 2] = basePoint.z - normal.z * palmarThick;
+      }
+    }
 
     mesh.geometry.attributes.position.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
@@ -723,32 +1052,27 @@ export class Hand3DScene {
     const root = hand.gltfModel;
     if (!root) return;
 
-    // 定位根节点到手腕位置
     const wrist = pts[0];
     root.position.set(wrist.x, wrist.y, wrist.z);
 
-    // 计算手掌大小比例
     const palmDist = Math.hypot(pts[5].x - pts[17].x, pts[5].y - pts[17].y);
-    const scale = (palmDist / 85) * 8.5; // WebXR 模型尺寸适配
+    const scale = (palmDist / 85) * 8.5;
     root.scale.set(scale, scale, scale);
 
-    // 遍历更新对应骨骼关节位置
     if (hand.gltfBones?.length > 0) {
-      // 对应表：MediaPipe 21 点到 GLTF 骨骼节点映射
       const mpToBoneMap = [
-        0,  // wrist
-        1, 2, 3, 4, // thumb
-        5, 6, 7, 8, // index
-        9, 10, 11, 12, // middle
-        13, 14, 15, 16, // ring
-        17, 18, 19, 20  // pinky
+        0,
+        1, 2, 3, 4,
+        5, 6, 7, 8,
+        9, 10, 11, 12,
+        13, 14, 15, 16,
+        17, 18, 19, 20,
       ];
 
       mpToBoneMap.forEach((mpIdx, bIdx) => {
         const bone = hand.gltfBones[bIdx];
         if (bone && pts[mpIdx]) {
           const pt = pts[mpIdx];
-          // 将相对手腕的世界坐标转为骨骼局部位移
           bone.position.set(
             (pt.x - wrist.x) / scale,
             (pt.y - wrist.y) / scale,
@@ -773,13 +1097,12 @@ export class Hand3DScene {
 
     const matSet = this.materials[themeName] || this.materials.skin;
 
-    // 重新应用材质到双手的所有网格
     ['Right', 'Left'].forEach((side) => {
       const hand = this.hands[side];
       if (!hand) return;
 
       hand.palmMesh.material = matSet.palm;
-      hand.wristMesh.material = matSet.joint;
+      hand.wristMesh.material = matSet.wrist || matSet.joint;
 
       hand.fingers.forEach((finger) => {
         finger.knuckles.forEach((k) => (k.mesh.material = matSet.joint));

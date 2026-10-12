@@ -16,6 +16,7 @@ const jsonBuf = buffer.slice(20, 20 + chunk0Length);
 const gltf = JSON.parse(jsonBuf.toString('utf-8'));
 
 console.log('Nodes count:', gltf.nodes?.length);
-console.log('Nodes names:', gltf.nodes?.map(n => n.name).filter(Boolean));
-console.log('Skins:', JSON.stringify(gltf.skins, null, 2));
-console.log('Meshes:', gltf.meshes?.map(m => m.name));
+gltf.nodes?.forEach((node, i) => {
+  console.log(`Node ${i} [${node.name}]: children =`, node.children);
+});
+
