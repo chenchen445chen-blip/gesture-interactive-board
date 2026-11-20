@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.14",
+    "@tweenjs/tween.js": "^25.0.0",
     "@webxr-input-profiles/assets": "^1.0.20",
+    "animejs": "^4.5.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

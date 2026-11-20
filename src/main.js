@@ -5,6 +5,7 @@ import { DrawingBoard } from './canvas/drawing-board.js';
 import { Toolbar } from './ui/toolbar.js';
 import { StatsHud } from './ui/stats-hud.js';
 import { Hand3DScene } from './hand3d/hand-scene.js';
+import { Hand3DStudio } from './hand3d/hand-studio.js';
 
 /**
  * 手势交互画板主应用程序
@@ -56,6 +57,9 @@ class GestureApp {
     this.virtualCursor = new VirtualCursor(this.cursorElement);
     this.statsHud      = new StatsHud();
     this.hand3d        = new Hand3DScene(this.hand3dCanvas);
+    this.handStudio    = new Hand3DStudio(this.hand3d, {
+      onToast: (msg) => this.showToast(msg),
+    });
 
     this.toolbar = new Toolbar(this.drawingBoard, {
       onToggleSkeleton: (visible) => {
@@ -108,6 +112,7 @@ class GestureApp {
 
     window.addEventListener('resize', () => {
       this.hand3d.resize(window.innerWidth, window.innerHeight);
+      this.handStudio?.resize(window.innerWidth, window.innerHeight);
     });
   }
 
@@ -151,6 +156,9 @@ class GestureApp {
   // ═══════════════════════════════════════════════════════
 
   async startGesture() {
+    if (this.handStudio?.active) {
+      this.handStudio.exitStudioMode();
+    }
     this.setFabState('loading', '正在初始化模型...');
     try {
       await this.detector.init((msg) => this.setFabState('loading', msg));

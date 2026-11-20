@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { SkinnedHandMeshDriver } from './skinned-hand-driver.js';
 
 /**
  * createAnatomicalSegmentGeometry
@@ -257,6 +258,7 @@ export class Hand3DScene {
 
     // 开源 GLTF 模型缓存与加载状态
     this.gltfLoader = new GLTFLoader();
+    this.skinnedDriver = new SkinnedHandMeshDriver();
     this.cachedGltfModels = {
       Right: null,
       Left: null,
@@ -322,41 +324,51 @@ export class Hand3DScene {
   }
 
   _setupLighting() {
-    // 基础环境漫反射光
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
+    // 基础柔和全局环境光
+    const ambientLight = new THREE.AmbientLight(0xfff5ee, 0.9);
     this.scene.add(ambientLight);
 
-    // 主方向光（来自前方斜上方，模拟自然日光照在手背）
-    const mainDirLight = new THREE.DirectionalLight(0xfffaed, 1.3);
-    mainDirLight.position.set(200, -350, 600);
+    // 主摄影棚柔光箱（来自右前上方，照亮手心/手背与立体肌肉起伏）
+    const mainDirLight = new THREE.DirectionalLight(0xfffaf0, 1.85);
+    mainDirLight.position.set(260, 420, 520);
     this.scene.add(mainDirLight);
 
-    // 次表面透光轮廓补光（背光斜下方暖红光，模拟人手软组织透光次表面边缘）
-    const sssRimLight = new THREE.DirectionalLight(0xffa278, 0.85);
-    sssRimLight.position.set(-200, 350, -400);
+    // 左前上方补光（消除过死黑阴影，突出指缝与虎口细节）
+    const fillLight = new THREE.DirectionalLight(0xffe8d6, 0.95);
+    fillLight.position.set(-320, 220, 380);
+    this.scene.add(fillLight);
+
+    // 次表面透光轮廓背光（模拟真皮层微血管暖橙红边缘透光 Subsurface Scattering Rim）
+    const sssRimLight = new THREE.DirectionalLight(0xff8c66, 1.25);
+    sssRimLight.position.set(80, 260, -480);
     this.scene.add(sssRimLight);
 
-    // 天空冷暖侧补光（勾勒手指侧面高光轮廓）
-    const sideLight = new THREE.DirectionalLight(0xc7d2fe, 0.5);
-    sideLight.position.set(-350, -200, 400);
+    // 侧方冷调轮廓高光（勾勒手指与指甲侧缘立体感）
+    const sideLight = new THREE.DirectionalLight(0xdbeafe, 0.75);
+    sideLight.position.set(-420, -120, 220);
     this.scene.add(sideLight);
 
-    // 半球光（天空暖光与地面冷反光）
-    const hemiLight = new THREE.HemisphereLight(0xffedd5, 0x1e293b, 0.55);
+    // 半球天光与地面漫反射
+    const hemiLight = new THREE.HemisphereLight(0xfff1e6, 0x334155, 0.75);
     this.scene.add(hemiLight);
   }
 
   _initMaterials() {
-    // 1. 拟真人体 PBR 物理皮肤材质 (Realistic Subsurface Skin)
+    // 1. 拟真人体 PBR 物理皮肤材质 (Realistic Subsurface Human Skin)
     this.materials.skin = {
       palm: new THREE.MeshPhysicalMaterial({
-        color: 0xf5cca8,
-        roughness: 0.52,
+        color: 0xffffff, // 由 1024x1024 解剖学 UV 肤色贴图提供精准肤色、红润指腹与掌纹色泽
+        roughness: 0.46,
         metalness: 0.0,
-        clearcoat: 0.14,
-        clearcoatRoughness: 0.38,
-        sheen: 0.45,
-        sheenColor: new THREE.Color(0xffa888),
+        ior: 1.42,
+        reflectivity: 0.38,
+        clearcoat: 0.16,
+        clearcoatRoughness: 0.36,
+        sheen: 0.62,
+        sheenRoughness: 0.45,
+        sheenColor: new THREE.Color(0xff9478),
+        emissive: new THREE.Color(0x220804),
+        emissiveIntensity: 0.22,
         side: THREE.DoubleSide,
       }),
       finger: new THREE.MeshPhysicalMaterial({
@@ -617,21 +629,13 @@ export class Hand3DScene {
     const hand = this.hands[handedness];
     if (!hand) return;
 
-    const root = gltf.scene.clone();
-    root.traverse((node) => {
-      if (node.isMesh) {
-        node.castShadow = false;
-        node.receiveShadow = false;
-        node.material = new THREE.MeshPhysicalMaterial({
-          color: 0xf5cca8,
-          roughness: 0.5,
-          metalness: 0.0,
-          clearcoat: 0.15,
-          sheen: 0.45,
-          sheenColor: new THREE.Color(0xffa888),
-        });
-      }
-    });
+    const currentMat = this.materials[this.currentTheme] || this.materials.skin;
+    const { root, bones } = this.skinnedDriver.prepareSkinnedModel(
+      gltf.scene,
+      currentMat.palm,
+      currentMat.nail,
+      handedness
+    );
 
     hand.gltfModel = root;
     hand.gltfWrapper.add(root);
@@ -645,7 +649,7 @@ export class Hand3DScene {
       'pinky-finger-metacarpal', 'pinky-finger-phalanx-proximal', 'pinky-finger-phalanx-intermediate', 'pinky-finger-phalanx-distal', 'pinky-finger-tip',
     ];
 
-    hand.gltfBones = jointNames.map((jName) => root.getObjectByName(jName)).filter(Boolean);
+    hand.gltfBones = jointNames.map((jName) => bones[jName]).filter(Boolean);
   }
 
   // ═══════════════════════════════════════════════════════
@@ -702,10 +706,12 @@ export class Hand3DScene {
         }
         const pts3D = hand.smoothedPts;
 
-        if (this.currentTheme === 'model' && hand.gltfModel && this.modelLoadState[side] === 'loaded') {
-          this._driveGltfHand(hand, pts3D, landmarks);
+        if (hand.gltfModel && this.modelLoadState[side] === 'loaded' && this.skinnedDriver) {
+          // 默认全程使用实验台验收合格的一体成型 1360 顶点蒙皮真手高模 + 25 根解剖骨骼 + 柔和掌纹/指纹纹理 + 立体指甲盖
+          this.skinnedDriver.applyLiveLandmarksToSkinnedHand(hand.gltfModel, pts3D, handData);
           hand.gltfWrapper.visible = true;
           this._setAnatomicalVisible(hand, false);
+          this._updateHandFeedbackOverlays(hand, pts3D, handData);
         } else {
           hand.gltfWrapper.visible = false;
           this._setAnatomicalVisible(hand, true);
@@ -870,8 +876,16 @@ export class Hand3DScene {
       }
     });
 
+    // 5. 悬浮接触柔和暗影 + 6. 捏合作画光环 + 7. 橡皮擦指示环
+    this._updateHandFeedbackOverlays(hand, pts, handData);
+  }
+
+  _updateHandFeedbackOverlays(hand, pts, handData = null) {
+    const palmBaseScale = Math.hypot(pts[5].x - pts[17].x, pts[5].y - pts[17].y) || 100;
+
     // 5. 悬浮接触柔和暗影
     if (hand.shadowMesh) {
+      hand.shadowMesh.visible = true;
       const pWrist = pts[0];
       const pMiddle = pts[9];
       const palmCenterX = (pWrist.x + pMiddle.x) * 0.5;
@@ -1103,6 +1117,10 @@ export class Hand3DScene {
 
       hand.palmMesh.material = matSet.palm;
       hand.wristMesh.material = matSet.wrist || matSet.joint;
+
+      if (hand.gltfModel && this.skinnedDriver) {
+        this.skinnedDriver.setMaterial(hand.gltfModel, matSet.palm, matSet.nail);
+      }
 
       hand.fingers.forEach((finger) => {
         finger.knuckles.forEach((k) => (k.mesh.material = matSet.joint));
